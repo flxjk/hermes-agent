@@ -4,6 +4,7 @@ import asyncio
 
 import pytest
 
+from tests.gateway.session_claims import claim
 from tests.gateway.test_automation_compression_media import _admit_human, _discord_owner
 
 

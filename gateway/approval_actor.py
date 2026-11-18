@@ -11,8 +11,15 @@ responses) asks :func:`approval_refusal` first; ``/approve`` and ``/deny`` use
 ``approvals.approvers`` defaults to ``["*"]``: any admitted member answers, as before.
 Narrowing it (``[]``, or a list of chat user ids) is the opt-in: then only the requester,
 the listed ids and the platform's admins of the approval's chat scope (``allow_admin_from`` in a
-DM, ``group_allow_admin_from`` in a group, as for slash commands) answer. Host surfaces (CLI, TUI, Desktop, the API server and the session authority's
-``session:approve`` principals) answer as the host and never come through here.
+DM, ``group_allow_admin_from`` in a group, as for slash commands) answer.
+
+Under the default the chat's slash policy fills in: answering an approval IS ``/approve`` /
+``/deny`` and answering a slash-command confirmation runs that command, so where the scope sets an
+admin list (``allow_admin_from``) only someone allowed to run that command there (an admin, or
+``user_allowed_commands``) answers, whichever way they answer. A narrowed ``approvers`` is the
+explicit approval setting and takes precedence. Clarify answers run no command. Host surfaces (CLI,
+TUI, Desktop, the API server and the session authority's ``session:approve`` principals) answer as
+the host and never come through here.
 
 The other prompts a chat member can answer for someone else follow the same rule through the same
 :func:`may_answer`: a slash-command confirmation (:func:`slash_confirm_refusal`) and the agent's
@@ -26,6 +33,8 @@ from typing import Any, Iterable, Optional
 
 # Refusal "name" of an entry with no requester recorded; ``refusal_text`` words it as admins-only.
 _NO_REQUESTER = "\0no-requester"
+# Refusal "name" prefix when the chat's slash policy refused the answer's command (``+ command``).
+_ADMIN_ONLY = "\0admin-only:"
 
 
 def may_answer(authority: dict, actor_id: Any, admin_ids: Any = (), extra: Any = None,
@@ -91,10 +100,10 @@ def runner_answer_policy(source: Any):
     from gateway.run import _gateway_runner_ref
     from gateway.slash_access import policy_for_runner_source
 
-    return policy_for_runner_source(_gateway_runner_ref(), source).admin_user_ids
+    return policy_for_runner_source(_gateway_runner_ref(), source)
 
 
-def answerable_request_ids(session_key: str, actor_id: Any, *, admin_ids: Iterable[str] = (),
+def answerable_request_ids(session_key: str, actor_id: Any, *, admin_ids: Any = (),
                            request_id: Optional[str] = None, resolve_all: bool = False,
                            extra: Any = None, choice: Optional[str] = None,
                            admitted: bool = True) -> tuple[list[str], Optional[str]]:
@@ -111,6 +120,7 @@ def answerable_request_ids(session_key: str, actor_id: Any, *, admin_ids: Iterab
         pending = [p for p in pending if p.get("request_id") == request_id]
     elif not resolve_all:
         pending = pending[:1]
+    commands = approval_commands(choice)
     for entry in pending:
         refused = _refusal(entry, actor_id, admin_ids, extra, commands, admitted)
         if refused is not None:
@@ -124,7 +134,8 @@ def approval_refusal(session_key: str, actor_id: Any, *, admin_ids: Any = (),
     """``None`` when *actor_id* may answer the approval a click resolves (the one matching
     *request_id*, else the oldest); otherwise the requester's display name for an "only X can
     answer this" reply. Nothing pending is never refused: the resolver then reports "nothing
-    pending" exactly as before. Adapters pass their platform ``extra`` block instead of *admin_ids*."""
+    pending" exactly as before. Adapters pass their platform ``extra`` block instead of *admin_ids*,
+    and the clicked *choice* so the slash floor checks that answer's own command."""
     return answerable_request_ids(session_key, actor_id, admin_ids=admin_ids,
                                   request_id=request_id, extra=extra, choice=choice, admitted=admitted)[1]
 
@@ -141,8 +152,10 @@ def _authority_refusal(authority: Any, actor_id: Any, admin_ids: Any, extra: Any
 def slash_confirm_refusal(session_key: str, confirm_id: str, actor_id: Any, *, admin_ids: Any = (),
                           extra: Any = None, admitted: bool = True) -> Optional[str]:
     """:func:`approval_refusal` for the slash-command confirmation (``/reload-mcp``) a click or typed
-    reply would resolve: the same requester / approvers / admins rule, read from the pending confirm.
-    Nothing pending (or another confirm id) is never refused: the resolver reports it as before."""
+    reply would resolve: the same rule, read from the pending confirm, with the confirmed command as
+    the slash floor (answering runs it). Nothing pending (or another confirm id) is never refused: the
+    resolver reports it as before."""
+    from hermes_cli.commands import resolve_command
     from tools.slash_confirm import get_pending
 
     pending = get_pending(session_key) or {}
@@ -170,4 +183,47 @@ def refusal_text(requester: str) -> str:
 
     if requester == _NO_REQUESTER:
         return t("gateway.exec_approval.not_requester_admins_only")
+    if requester.startswith(_ADMIN_ONLY):
+        return t("gateway.unauthorized.admin_only", command=requester[len(_ADMIN_ONLY):], suffix="").strip()
     return t("gateway.exec_approval.not_requester", requester=requester)
+
+
+def opener_authority(event: Any) -> Optional[dict]:
+    """Who may answer a picker card (``/model``, ``/reasoning``...) or the ``/update`` prompt *event*'s
+    sender opened: the opener, or an admin of the chat scope (``allow_admin_from`` /
+    ``group_allow_admin_from``), so a member refused an admin-gated command cannot apply an admin's
+    open card instead, and nobody else's tap or typed text answers the opener's prompt.
+    ``None`` (anyone admitted answers, as before) when the sender is unknown, e.g. a shared observed
+    group whose route carries no user, so a card is never left with nobody able to answer it."""
+    source = getattr(event, "source", None)
+    actor = getattr(event, "user_id", None) or getattr(source, "user_id", None)
+    if not actor:
+        return None
+    return {"requester_id": str(actor),
+            "requester_name": str(getattr(event, "user_name", None) or getattr(source, "user_name", None) or actor),
+            "chat_type": str(getattr(source, "chat_type", "") or ""), "approvers": []}
+
+
+def picker_refusal(on_selected: Any, actor_id: Any, *, extra: Any = None) -> Optional[str]:
+    """``None`` when *actor_id* may use the picker card whose selection callback is *on_selected*;
+    otherwise the opener's name for :func:`refusal_text`. The gateway sets the opener's
+    :func:`opener_authority` on the callback as ``prompt_authority``, so every adapter's picker
+    state already carries it; a callback without one is never refused. Adapters pass their
+    platform ``extra`` block (its admins answer any card of that chat scope)."""
+    return _authority_refusal(getattr(on_selected, "prompt_authority", None), actor_id, (), extra)
+
+
+def update_prompt_refusal(actor_id: Any, *, admin_ids: Iterable[str] = (), extra: Any = None) -> Optional[str]:
+    """:func:`picker_refusal` for the pending ``/update`` Yes/No prompt: the authority ``/update``
+    recorded in its pending marker. No marker or no authority in it is never refused."""
+    import json
+
+    from hermes_constants import get_process_hermes_home  # where /update wrote it (gateway.run._hermes_home)
+
+    for name in (".update_pending.claimed.json", ".update_pending.json"):
+        try:
+            marker = json.loads((get_process_hermes_home() / name).read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            continue
+        return _authority_refusal(marker.get("authority") if isinstance(marker, dict) else None, actor_id, admin_ids, extra)
+    return None

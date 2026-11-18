@@ -761,6 +761,12 @@ class ToolRegistry:
         mod = self._callable_module(handler)
         return self._plugin_namespace_of_module(mod) if mod else None
 
+    def is_builtin(self, entry: ToolEntry) -> bool:
+        """True for a tool Hermes ships: handler defined in the ``tools`` package, and not an
+        MCP server's tool (those handlers live in ``tools`` too, under an ``mcp-*`` toolset)."""
+        return (not entry.toolset.startswith("mcp-")
+                and self._callable_module(entry.handler).partition(".")[0] == "tools")
+
     @staticmethod
     def _callable_module(handler: Callable) -> str:
         """Resolve defining module through wrappers, partials, and objects."""
@@ -906,12 +912,6 @@ class ToolRegistry:
                 dynamic_schema_overrides=dynamic_schema_overrides, compat_args=frozenset(compat_args),
                 self_checked_args=frozenset(self_checked_args),
                 deadline_floor=deadline_floor)
-            # Availability is derived per-tool (_toolset_has_exposable_tools), so this map no
-            # longer gates a toolset; it still feeds get_toolset_requirements ->
-            # TOOLSET_REQUIREMENTS["check_fn"], which banner.py reads (presence only,
-            # never called) to classify an unavailable toolset as lazy-init vs disabled.
-            if scope is None and check_fn and toolset not in self._toolset_checks:
-                self._toolset_checks[toolset] = check_fn
             self._generation += 1
 
     def deregister(self, name: str, *, scope: Optional[str] = None) -> None:
@@ -1087,7 +1087,7 @@ class ToolRegistry:
                 result = _run_async(entry.handler(args, **kwargs))
             else:
                 result = entry.handler(args, **kwargs)
-            return self._normalize_handler_result(name, result)
+            return flag_unknown_args(self._normalize_handler_result(name, result), name, unknown, valid)
         except Exception as e:
             # exc_info already renders the exception, so keep the message copy bounded.
             logger.exception("Tool %s dispatch error: %s", name, _bound_error_text(str(e)))

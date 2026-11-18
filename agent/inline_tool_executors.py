@@ -15,8 +15,9 @@ from importlib import import_module
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from agent.prompt_cache_scope import conversation_id
-from tools.arg_validation import call_with_arg_checks
 from tools.arg_coercion import coerce_tool_args
+from tools.arg_validation import call_with_arg_checks
+from tools.registry import registry
 
 
 def tool_hook_ids(agent, effective_task_id: str, tool_call_id: Optional[str]) -> dict[str, str]:
@@ -355,7 +356,6 @@ _RAW_INLINE_TOOL_EXECUTORS: dict[str, InlineToolExecutor] = {
 def _coerced(name: str, executor: InlineToolExecutor) -> InlineToolExecutor:
     def _exec(agent, args: dict, ctx: InlineToolContext) -> Any:
         from tools.hosted_tool_policy import hosted_tool_refusal
-        from tools.registry import registry
         if refusal := hosted_tool_refusal(name):  # the table is an execution primitive: same allowlist
             return json.dumps({"error": refusal}, ensure_ascii=False)
         return call_with_arg_checks(

@@ -814,6 +814,8 @@ def _scan_text(text: str, rel_path: str, suffix: str, skill: bool) -> list[Findi
                     pid, severity, description, line, lines[owners[i - 1]], suffix)
                 findings.append(Finding(pid, line_severity, category, rel_path, i,
                                         text if len(text) <= 120 else text[:117] + "...", line_description))
+    if skill:
+        raise_provider_key_reads(findings, lines, views[1] if views else None)
     for i, line in enumerate(lines, start=1):
         if (char := next((c for c in INVISIBLE_CHARS if c in line), None)) is not None:
             name = _unicode_char_name(char)
@@ -920,7 +922,7 @@ def scan_skill(skill_path: Path, source: str = "community", *, trust_level: str 
             if f.is_file():
                 findings.extend(scan_file(f, str(f.relative_to(skill_path)), skill=True))
     elif skill_path.is_file():
-        findings.extend(scan_file(skill_path, skill_path.name))
+        findings.extend(scan_file(skill_path, skill_path.name, skill=True))
     if trust == "community":
         findings = [_community_note(f) for f in findings]
     verdict = _determine_verdict(findings)

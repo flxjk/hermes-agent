@@ -79,11 +79,9 @@ def _surface() -> str:
         return value
     if value in _SURFACE_ALIASES:
         return _SURFACE_ALIASES[value]
-    try:
-        if value in get_all_platforms():
-            return "gateway"
-    except Exception:
-        pass
+    # get_all_platforms guards its plugin-registry merge itself; the membership read cannot fail.
+    if value in get_all_platforms():
+        return "gateway"
     return "gateway" if value in _KNOWN_GATEWAY_PLATFORMS else "other"
 
 

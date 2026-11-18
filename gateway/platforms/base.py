@@ -524,9 +524,9 @@ def validate_inbound_media_size(
         raise ValueError(f"Inbound {media_type} payload is too large ({size} bytes > {limit} bytes)")
 
 
-async def _read_httpx_body_with_limit(response, *, media_type: str) -> bytes:
-    """Read an httpx streaming body under the media cap: reject an oversized ``Content-Length``
-    early, then re-check the running total per chunk (a lying/absent header can't smuggle more)."""
+async def read_httpx_body_with_limit(response, *, media_type: str, body=None) -> bytes:
+    """Read an httpx streaming body (aiohttp: ``body=resp.content.iter_chunked(n)``) under the media
+    cap: reject an oversized ``Content-Length`` early, then re-check the running total per chunk."""
     max_bytes = get_inbound_media_max_bytes()
     content_length = response.headers.get("content-length")
     if content_length:
@@ -538,7 +538,7 @@ async def _read_httpx_body_with_limit(response, *, media_type: str) -> bytes:
             validate_inbound_media_size(declared_size, media_type=media_type, max_bytes=max_bytes)
     chunks: list[bytes] = []
     total = 0
-    async for chunk in response.aiter_bytes():
+    async for chunk in (response.aiter_bytes() if body is None else body):
         total += len(chunk)
         validate_inbound_media_size(total, media_type=media_type, max_bytes=max_bytes)
         chunks.append(chunk)
@@ -658,7 +658,7 @@ async def _cache_media_from_url(url: str, ext: str, retries: int, *, media_type:
             try:
                 async with client.stream("GET", url, headers=headers) as response:
                     response.raise_for_status()
-                    content = await _read_httpx_body_with_limit(response, media_type=media_type)
+                    content = await read_httpx_body_with_limit(response, media_type=media_type)
                 return await asyncio.to_thread(cache_fn, content, ext)
             except (httpx.TimeoutException, httpx.HTTPStatusError) as exc:
                 if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code < 429:
@@ -1043,9 +1043,7 @@ def validate_media_delivery_path(path: str, session_key: str = "") -> Optional[s
     if not expanded.is_absolute():
         return None
     # Docker agents emit MEDIA:/workspace/... — map container paths to host paths first.
-    resolved = _translate_docker_container_media_path(expanded, session_key=session_key)
-    if resolved is None:
-        resolved = _resolve_path(expanded, strict=True)
+    resolved = _translate_docker_container_media_path(expanded, session_key=session_key) or _resolve_path(expanded, strict=True)
     if resolved is None or not resolved.is_file():
         return None
     # Project-local secret env files (.env, .envrc, ...) are read-blocked anywhere on disk by
@@ -4071,67 +4069,14 @@ class BasePlatformAdapter(_SessionModelSettingsMixin, ABC):
     async def _record_delivery_obligation(
         self, event: MessageEvent, session_key: str, text_content: str,
         delivery_adapter: "BasePlatformAdapter", is_ephemeral_response: bool) -> Optional[str]:
-        """Ledger the final response BEFORE the send so a crash before platform ACK redelivers on
-        next boot; best-effort, skips slash-command and ephemeral replies. Returns the obligation id
-        or None."""
-        if is_ephemeral_response or str(event.text or "").lstrip().startswith(
-            ("/", self.typed_command_prefix or "!")):
-            return None
-        try:
-            from gateway.delivery_ledger import (
-                compute_obligation_id, ledger_enabled, mark_attempting, record_obligation)
-            if not await asyncio.to_thread(ledger_enabled):
-                return None
-            source = event.source
-            # ``ledger_message_id`` wins when set: a queued chain's final answers the last message
-            # of the chain, not the event that opened it (see ``MessageEvent.ledger_message_id``).
-            _ledger_id = getattr(event, "ledger_message_id", None)
-            if _ledger_id is None:
-                _ledger_id = getattr(event, "message_id", "")
-            obligation_id = compute_obligation_id(
-                session_key, str(_ledger_id or ""), text_content)
-            await asyncio.to_thread(
-                record_obligation, obligation_id=obligation_id, session_key=session_key,
-                platform=str(getattr(source.platform, "value", source.platform)),
-                chat_id=source.chat_id, thread_id=getattr(source, "thread_id", None),
-                content=text_content,
-                adapter_profile=getattr(delivery_adapter, "_owner_profile", None))
-            await asyncio.to_thread(mark_attempting, obligation_id)
-            return obligation_id
-        except Exception:
-            logger.debug("delivery ledger record failed", exc_info=True)
-            return None
+        """Ledger a final before its send (``base_delivery_ledger.record_final_obligation``); the per-adapter seam."""
+        return await record_final_obligation(self, event, session_key, text_content, delivery_adapter, is_ephemeral_response)
 
     async def _finalize_delivery_obligation(
         self, obligation_id: str, result: Any, event: MessageEvent,
         delivery_adapter: "BasePlatformAdapter") -> None:
-        """Mark the ledger row delivered/failed (best-effort). On ``send_path_degraded`` with a
-        replacement adapter live, trigger another redelivery sweep (the watcher's may have run
-        before this failure landed; atomic claiming keeps it idempotent). On any other rejection arm
-        the runner's timed redelivery, so the reply goes out once the flood penalty or the retry
-        backoff has passed instead of waiting for the next restart (#91653)."""
-        try:
-            from gateway.dead_targets import classify_dead_error
-            from gateway.delivery_ledger import is_reconnect_only, mark_delivered, mark_failed
-            if getattr(result, "success", False):
-                await asyncio.to_thread(mark_delivered, obligation_id)
-                return
-            error = str(getattr(result, "error", "") or "")
-            await asyncio.to_thread(mark_failed, obligation_id, error)
-            if is_reconnect_only(error):
-                redeliver = getattr(
-                    self.gateway_runner, "_redeliver_failed_obligations_for_platform", None)
-                live = self._final_delivery_adapter(event.source)
-                if live is not delivery_adapter and callable(redeliver):
-                    await redeliver(event.source.platform,
-                                    profile=getattr(delivery_adapter, "_owner_profile", None))
-            elif classify_dead_error(error) is None:  # a dead chat is never retried: no timer to wake
-                schedule = getattr(self.gateway_runner, "_schedule_flood_redelivery", None)
-                if callable(schedule):
-                    schedule(event.source.platform,
-                             profile=getattr(delivery_adapter, "_owner_profile", None))
-        except Exception:
-            logger.debug("delivery ledger update failed", exc_info=True)
+        """Settle a ledgered final from its send result (``base_delivery_ledger.finalize_final_obligation``)."""
+        await finalize_final_obligation(self, obligation_id, result, event, delivery_adapter)
 
     async def _deliver_media_attachments(
         self, event: MessageEvent, media_files: list, local_files: list, *,

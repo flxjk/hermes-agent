@@ -20,6 +20,7 @@ from agent.turn_context import extract_api_content_sidecar
 from gateway.config import Platform
 from gateway.platforms.base import EphemeralReply
 from gateway.platforms.event import MessageEvent, MessageType
+from gateway.run_topics import TopicLinkedElsewhere
 from gateway.session import SessionSource, build_session_key, is_shared_multi_user_session
 from gateway.session_transcript import TranscriptReadError
 from gateway.slash_commands_branch_thread import (
@@ -1422,8 +1423,12 @@ class GatewaySessionCommandsMixin:
             await self.async_session_store.get_or_create_session(dest_source)
         with self._telegram_topic_publication(dest_source):
             new_entry = await self.async_session_store.switch_session(dest_key, new_session_id)
-            if new_entry and in_place:
-                await self._follow_telegram_topic_switch(dest_source, new_entry, reason="branch-command")
+            try:
+                if new_entry and in_place:
+                    await self._follow_telegram_topic_switch(dest_source, new_entry, reason="branch-command",
+                                                             departed=current_entry)
+            except TopicLinkedElsewhere as refused:  # bound elsewhere since the switch: route put back
+                return str(refused)
         if not new_entry:
             return t("gateway.branch.switch_failed")
         self._clear_session_boundary_security_state(dest_key)

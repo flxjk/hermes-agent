@@ -124,7 +124,7 @@ def _store(authority):
 
 def _group(authority, actor, method, params, *, host_scope=False):
     from gateway import hosted_rooms as rooms
-    from gateway.hosted_room_context import room_context, set_room_context
+    from gateway.hosted_room_context import groups_state_result, set_room_context
     if method == 'groups.disband':
         params = {**params, 'room_id': rooms._room_id(params.get('room_id'))}
     store = _store(authority)

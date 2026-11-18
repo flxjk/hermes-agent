@@ -353,6 +353,7 @@ class SSHEnvironment(BaseEnvironment):
             shutil.rmtree(self.control_dir, ignore_errors=True)
 
     def cleanup(self):
+        self.stop_all_processes()
         if self._sync_manager:
             logger.info("SSH: syncing files from sandbox...")
             self._sync_manager.sync_back()

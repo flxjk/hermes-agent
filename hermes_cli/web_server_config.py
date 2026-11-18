@@ -406,77 +406,6 @@ def _schema_with_dynamic_provider_options() -> dict[str, dict[str, Any]]:
     return {**CONFIG_SCHEMA, **overlay} if overlay else CONFIG_SCHEMA
 
 
-def _normalize_main_model_assignment(provider: str, model: str) -> tuple[str, str]:
-    """Normalize a main-slot (provider, model) pair before persisting.
-
-    The per-card "Use as → Main model" menu can send the model's VENDOR prefix as the
-    provider (analytics rows with no ``billing_provider``), producing e.g.
-    ``provider: anthropic`` + ``default: anthropic/claude-opus-4.6`` — an aggregator slug on
-    the native provider, which 400s. Two repairs at this single chokepoint:
-
-    1. Vendor-name → Hermes-provider: when the provider is not a known provider/alias but the
-       model is a vendor-prefixed slug, keep the user's CURRENT aggregator if on one, else
-       openrouter. User-declared ``providers:``/``custom_providers:`` entries resolve first,
-       and durable named-custom slugs (``custom`` / ``custom:<name>``) are excluded —
-       ``_KNOWN_PROVIDER_NAMES`` lists only the bare ``custom`` bucket, so without this a
-       LiteLLM proxy serving ``ollama/glm-5.2`` would be silently reassigned to openrouter.
-       Matching only that syntax (not ``startswith("custom")``) avoids swallowing
-       unconfigured vendors like ``customproxy``.
-    2. Model-format normalization for the resolved provider via
-       ``normalize_model_for_provider`` (custom/user providers keep the model verbatim).
-    """
-    from hermes_cli.config import load_config
-    from hermes_cli.config import get_compatible_custom_providers
-    from hermes_cli.models import _AGGREGATOR_PROVIDERS, _KNOWN_PROVIDER_NAMES, normalize_provider
-    from hermes_cli.model_normalize import normalize_model_for_provider
-    from hermes_cli.providers import resolve_custom_provider, resolve_user_provider
-
-    prov_in = (provider or "").strip()
-    model_in = (model or "").strip()
-    canonical = normalize_provider(prov_in)
-
-    try:
-        cfg = load_config()
-    except Exception:
-        cfg = {}
-    if not isinstance(cfg, dict):
-        cfg = {}
-    user_providers = cfg.get("providers")
-    declared = resolve_user_provider(
-        prov_in, user_providers if isinstance(user_providers, dict) else {}
-    ) or resolve_custom_provider(prov_in, get_compatible_custom_providers(cfg))
-    if declared is not None:
-        return declared.id, model_in
-
-    is_custom_provider_slug = canonical == "custom" or canonical.startswith("custom:")
-    if canonical not in _KNOWN_PROVIDER_NAMES and not is_custom_provider_slug and "/" in model_in:
-        try:
-            cur_cfg = cfg.get("model", {})
-            cur_provider = (
-                str(cur_cfg.get("provider", "") or "").strip().lower() if isinstance(cur_cfg, dict) else ""
-            )
-        except Exception:
-            cur_provider = ""
-        if cur_provider and normalize_provider(cur_provider) in _AGGREGATOR_PROVIDERS:
-            canonical = normalize_provider(cur_provider)
-            prov_in = cur_provider
-        else:
-            from hermes_cli.models_detect import provider_has_credentials
-
-            # Only guess OpenRouter when the user actually holds a key for it; otherwise keep the
-            # pair as sent rather than persisting a provider they never selected.
-            if provider_has_credentials("openrouter"):
-                canonical = prov_in = "openrouter"
-
-    if canonical in _KNOWN_PROVIDER_NAMES and not canonical.startswith("custom"):
-        try:
-            model_in = normalize_model_for_provider(model_in, canonical) or model_in
-        except Exception:
-            _log.debug("model normalization failed for %s/%s", prov_in, model_in, exc_info=True)
-
-    return prov_in, model_in
-
-
 _BARE_CUSTOM_SELECTORS = frozenset({"custom", "local"})
 
 
@@ -807,6 +736,7 @@ def _prepare_main_assignment(cfg: dict, provider: str, model: str, base_url: str
     """Validation half of a main-slot assignment: ``(effective base_url, switch result)``.
     ``switch_model`` fetches catalogs / probes endpoints, so callers run this BEFORE taking
     ``_CONFIG_MUTATION_LOCK``; it writes nothing."""
+    from hermes_cli.model_assignment import normalize_main_model_assignment
     if not provider or not model:
         raise HTTPException(status_code=400, detail="provider and model required for main")
     explicit_endpoint = _is_explicit_custom_endpoint(provider, base_url)
@@ -815,7 +745,7 @@ def _prepare_main_assignment(cfg: dict, provider: str, model: str, base_url: str
         # recover a bare ``custom`` onto the first named custom provider and keep ITS URL (#145466).
         provider, model = provider.strip(), model.strip()
     else:
-        provider, model = _normalize_main_model_assignment(provider, model)
+        provider, model = normalize_main_model_assignment(provider, model)
     provider_entry = _provider_entry(cfg, provider)
     if not base_url and isinstance(provider_entry, dict) and provider_entry.get("base_url"):
         base_url = str(provider_entry.get("base_url") or "").strip()
@@ -1037,7 +967,7 @@ def _infer_provider_on_model_change(model_val: str, prev_provider: str) -> tuple
     in order: curated-catalog detection (``detect_provider_for_model``), then the vendor-slug
     heuristic — a ``vendor/model`` slug cannot belong to a non-aggregator provider (e.g.
     ``ollama-local``), so return the sentinel ``"openrouter"``; the caller's
-    ``_normalize_main_model_assignment`` resolves the real aggregator (keeps the current one).
+    ``model_assignment.normalize_main_model_assignment`` resolves the real aggregator (keeps the current one).
     """
     name = (model_val or "").strip()
     if not name:
@@ -1112,7 +1042,8 @@ def _denormalize_config_from_web(config: dict[str, Any]) -> dict[str, Any]:
             if model_val != prev_default and prev_provider:
                 new_provider, resolved_model = _infer_provider_on_model_change(model_val, prev_provider)
                 if new_provider and new_provider.strip().lower() != prev_provider.lower():
-                    norm_provider, norm_model = _normalize_main_model_assignment(new_provider, resolved_model)
+                    from hermes_cli.model_assignment import normalize_main_model_assignment
+                    norm_provider, norm_model = normalize_main_model_assignment(new_provider, resolved_model)
                     result = _validated_main_model_selection(disk_cfg, norm_provider, norm_model)
                     disk_model = _apply_main_model_assignment(disk_model, result)
                     model_val = result.new_model

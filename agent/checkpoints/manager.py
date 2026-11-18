@@ -1040,7 +1040,8 @@ class CheckpointManager:
         """Take a checkpoint if enabled and not already done this turn.
 
         Returns True if a checkpoint was taken, False otherwise.
-        Never raises — all errors are silently logged.
+        Never raises — all errors are silently logged. Never in a hosted scope: the working
+        directory is the agent's sandbox's, not this host's.
         """
         from tools.hosted_tool_policy import host_feature_enabled
         if not self.enabled or not host_feature_enabled("checkpoints"):

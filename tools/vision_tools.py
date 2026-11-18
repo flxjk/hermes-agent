@@ -1039,7 +1039,8 @@ registry.register(
     handler=_handle_vision_analyze,
     check_fn=check_vision_requirements,
     is_async=True,
-    emoji="👁️")
+    emoji="👁️",
+    self_checked_args=("question",))  # the native-image route loads the image without one
 
 
 # --- video_analyze --------------------------------------------------------
@@ -1200,4 +1201,5 @@ registry.register(
     handler=_handle_video_analyze,
     check_fn=check_video_requirements,
     is_async=True,
-    emoji="🎬")
+    emoji="🎬",
+    self_checked_args=("question",))

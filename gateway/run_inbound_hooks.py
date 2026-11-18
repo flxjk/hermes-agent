@@ -45,6 +45,15 @@ async def _stop_exec_tree(proc) -> None:
         await asyncio.wait_for(proc.wait(), timeout=5)
 
 
+def _carry_replied_voice_answer(event, rewritten, new_text: str) -> None:
+    """``dataclasses.replace`` drops the adapter's private typed-answer attribute, and without it a
+    clarify reads the replied-to voice note's speech as the answer. Carry it: the plugin's rewritten
+    text is the answer, or the typed text when the plugin returned the text unchanged."""
+    attr = "_telegram_replied_voice_typed_text"  # read by _prepare_clarify_reply_text
+    if (typed := getattr(event, attr, None)) is not None:
+        setattr(rewritten, attr, typed if new_text == event.text else new_text.strip())
+
+
 class GatewayInboundHooksMixin:
     """Hook, quick-command and plugin-command dispatch for ``GatewayInboundMixin``."""
 

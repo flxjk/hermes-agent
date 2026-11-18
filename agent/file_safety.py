@@ -144,8 +144,11 @@ def _guard_homes(path: str = "") -> set[str]:
 
 
 def _homes_and_resolved(path: str) -> tuple[set[str], str]:
-    """``(guard homes, realpath(expanduser(path)))`` — the write-guard coordinate pair."""
-    return _guard_homes(path), os.path.realpath(os.path.expanduser(str(path)))
+    """``(guard homes, realpath(expanduser(path)))`` — the write-guard coordinate pair (a hosted
+    agent's path: its lexical form, see ``sandbox_lexical_path``)."""
+    from tools.environments.sandbox_scope import sandbox_lexical_path
+    lexical = sandbox_lexical_path(path)
+    return _guard_homes(path), lexical if lexical is not None else os.path.realpath(os.path.expanduser(str(path)))
 
 
 # ---------------------------------------------------------------------------
@@ -376,7 +379,9 @@ def _classify_write_denial(path: str, *, entry: bool = False) -> Optional[str]:
     if denial or not entry:
         return denial
     parent, leaf = split_entry(os.path.expanduser(str(path)))
-    entry_path = os.path.join(os.path.realpath(parent or "."), leaf)
+    from tools.environments.sandbox_scope import sandbox_lexical_path
+    lexical_parent = sandbox_lexical_path(parent or ".")
+    entry_path = os.path.join(lexical_parent if lexical_parent is not None else os.path.realpath(parent or "."), leaf)
     return _classify_resolved_write_denial(homes, entry_path)
 
 

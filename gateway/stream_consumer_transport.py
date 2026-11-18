@@ -311,9 +311,18 @@ class StreamTransportMixin:
                 chat_id=self.chat_id, content=text, metadata=self._metadata_for_send(final=True))
         except Exception as e:
             logger.debug("Fresh-final send failed, falling back to edit: %s", e)
-            return False
+            if not await self._uncertain_send_fully_shown(e):
+                return False
+            result = e  # a raised timeout may have landed too: same handling as a returned one
         if not getattr(result, "success", False):
-            return False
+            if not await self._uncertain_send_fully_shown(result):
+                return False
+            # The fresh final may be on screen with no id: editing the preview up to the same
+            # text would show the answer twice. Keep the preview (no id to clean up against).
+            logger.warning("Fresh-final send may have landed; not re-delivering it by edit")
+            self._edit_supported = False
+            self._delivery_ambiguous = is_turn_final
+            stale_ids, result = (), None
         new_message_id = getattr(result, "message_id", None)
         self._ceiling_observe(result)
         if stale_ids:  # best-effort preview cleanup; never delete the message just sent
@@ -336,7 +345,6 @@ class StreamTransportMixin:
             self._message_id = "__no_edit__"
             self._message_created_ts = None
 
-    @stops_reply_clock
     async def _send_or_edit(self, text: str, *, finalize: bool = False, is_turn_final: bool = True,
                             redacted: bool = False) -> bool:
         """Send or edit the streaming message; True if delivered.  ``finalize`` marks the
@@ -390,7 +398,7 @@ class StreamTransportMixin:
                     # A failed send disabled edits: a preview sent now could never be updated and
                     # would stay on screen truncated next to the final reply. Send only the final.
                     return False
-                return await self._first_send(text, finalize=finalize)
+                return await self._first_send(text, finalize=finalize, raw_text=pre_fence_text)
             if not self._edit_supported:
                 return False  # edits unsupported; fallback path sends the final
             return await self._edit_existing(text, finalize=finalize, is_turn_final=is_turn_final)
@@ -481,8 +489,10 @@ class StreamTransportMixin:
         # send must still fire so the user gets a real message.
         return True if await self._send_draft_frame(frame_text) else None
 
-    async def _first_send(self, text: str, *, finalize: bool) -> bool:
-        """First send, threaded to the user's message (correct topic/thread)."""
+    async def _first_send(self, text: str, *, finalize: bool, raw_text: Optional[str] = None,
+                          ) -> bool:
+        """First send, threaded to the user's message (correct topic/thread). ``raw_text`` is
+        ``text`` before display-only fence closing."""
         if getattr(self, "_egress_declined", False):
             # The connector refused this destination earlier in the run (see
             # _send_draft_frame). This is where every fallback path converges,
@@ -492,10 +502,19 @@ class StreamTransportMixin:
                 "declined this destination for this run"
             )
             return False
-        result = await self.adapter.send(
-            chat_id=self.chat_id, content=text, reply_to=self._initial_reply_to_id,
-            metadata=self._metadata_for_send(final=finalize, expect_edits=not finalize))
+        try:
+            result = await self.adapter.send(
+                chat_id=self.chat_id, content=text, reply_to=self._initial_reply_to_id,
+                metadata=self._metadata_for_send(final=finalize, expect_edits=not finalize))
+        except Exception as exc:
+            logger.error("Stream first send error: %s", exc, exc_info=True)
+            if await self._uncertain_send_fully_shown(exc):
+                return self._hold_ambiguous_first_send(text, raw_text, finalize=finalize)
+            self._edit_supported = False
+            return False
         if not result.success:
+            if await self._uncertain_send_fully_shown(result):
+                return self._hold_ambiguous_first_send(text, raw_text, finalize=finalize)
             self._edit_supported = False
             return False
         self._already_sent = True

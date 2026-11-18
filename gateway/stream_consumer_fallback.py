@@ -54,6 +54,12 @@ class StreamFallbackMixin:
         if not (result.success and result.message_id):
             self._edit_supported = False
             return reply_to_id
+        self._message_id = str(result.message_id)
+        self._track_preview_ids_from_result(result)
+        self._already_sent = True
+        self._last_sent_text = text
+        self._notify_new_message()
+        return str(result.message_id)
 
     def _adopt_partial_head(self, result: Any, text: str) -> bool:
         """A head send whose first parts landed (``partial_overflow`` naming a ``delivered_prefix``
@@ -74,8 +80,15 @@ class StreamFallbackMixin:
     def _visible_prefix(self) -> str:
         """Return the visible text already shown in the streamed message."""
         prefix = self._last_sent_text or ""
-        if self.cfg.cursor and prefix.endswith(self.cfg.cursor):
-            prefix = prefix[:-len(self.cfg.cursor)]
+        cursor = self.cfg.cursor
+        if cursor and prefix.endswith(cursor):
+            prefix = prefix[:-len(cursor)]
+        elif cursor and cursor in prefix:
+            # The display fence was closed after the cursor: the user saw the raw text, closed.
+            # Compared raw, a decoration never reads as unseen text that must be sent again.
+            raw = prefix[:prefix.rfind(cursor)]
+            if ensure_closed_code_fences(raw + cursor) == prefix:
+                prefix = ensure_closed_code_fences(raw)
         return self._clean_for_display(prefix)
 
     def _continuation_text(self, final_text: str) -> str:
@@ -301,10 +314,18 @@ class StreamFallbackMixin:
         continuation to send (the whole final when the prefix is from a *previous* segment)
         or None when the turn is settled here."""
         visible = self._visible_prefix()
+        # Leading whitespace (a post-tool segment's separator) never renders: compare without it.
+        shown_whole = bool(final_text.strip()) and final_text.lstrip() == visible.lstrip()
+        if self._preview_uncertain and shown_whole:
+            # The whole answer went out in a preview whose send timed out: it may already be on
+            # screen and, with no id, cannot be replaced, so any resend is a second copy.
+            self._already_sent = True
+            self._fallback_prefix = ""
+            self._mark_final_delivered(record=final_text)
+            return None
         # Telegram clients can lose (part of) a streamed preview after a failed
         # final edit, so opt-in adapters commit a fresh final send.
-        if (final_text.strip() and final_text == visible
-                and getattr(self.adapter, "RESEND_FINAL_ON_EMPTY_STREAM_FALLBACK", False) is True):
+        if shown_whole and getattr(self.adapter, "RESEND_FINAL_ON_EMPTY_STREAM_FALLBACK", False) is True:
             delivery = await self._send_empty_fallback_final(final_text)
             if delivery == "delivered":
                 return None
@@ -328,7 +349,7 @@ class StreamFallbackMixin:
             return None
         # The prefix may be from a *previous* segment (before a tool boundary),
         # wrongly reading as "already shown" — send final_text as-is.
-        if final_text.strip() and final_text != visible:
+        if final_text.strip() and not shown_whole:
             return final_text
         # Best-effort strip of a cursor left stuck by the edit failure.
         if (self._message_id and self._last_sent_text and self.cfg.cursor
@@ -355,6 +376,28 @@ class StreamFallbackMixin:
             except Exception as e:
                 logger.debug("per-chat limit resolution failed: %s", e)
         return _len_fn, raw_limit
+
+    async def _uncertain_send_fully_shown(self, result: Any) -> bool:
+        """True when a failed send (result or raised exception) may have landed in full, so sending
+        it again would duplicate it. Telegram's legacy path re-splits content escaping grew past the
+        cap and reports the messages after the timed-out one as ``unattempted_chunks``: only those
+        are sent now (the one in flight may already show); when they cannot be, the send is NOT
+        fully shown and the caller treats it as undelivered (a repeated head beats a lost tail)."""
+        shown = False
+        while self._send_failure_may_have_delivered(result):
+            raw = getattr(result, "raw_response", None)
+            if not (isinstance(raw, dict) and raw.get("unattempted_chunks")):
+                shown = True
+                break
+            result = await self.adapter._resume_partial_send(
+                self.chat_id, result, reply_to=None, metadata=self._metadata_for_send(final=True))
+            if result is None or getattr(result, "success", False):
+                shown = result is not None
+                break
+        # Counted as shown on a guess: the gateway leaves the answer to the delivery ledger's marked
+        # redelivery, so a send that never landed is not silence (``delivery_uncertain``).
+        self._delivery_uncertain = self._delivery_uncertain or shown
+        return shown
 
     async def _send_with_flood_retry(self, *, content: str, retry_log: str, reply_to=None):
         """adapter.send(final metadata) with ONE bounded flood retry; returns the last
@@ -390,11 +433,11 @@ class StreamFallbackMixin:
                 retry_log="Flood control on empty fallback final send; retrying in %.1fs")
         except Exception as exc:
             logger.debug("Empty fallback final send failed: %s", exc)
-            return "ambiguous" if self._send_failure_may_have_delivered(exc) else "failed"
+            return "ambiguous" if await self._uncertain_send_fully_shown(exc) else "failed"
         if not getattr(result, "success", False):
             if self._is_flood_error(result):
                 return "preview"
-            return "ambiguous" if self._send_failure_may_have_delivered(result) else "failed"
+            return "ambiguous" if await self._uncertain_send_fully_shown(result) else "failed"
 
         new_message_id = getattr(result, "message_id", None)
         self._ceiling_observe(result)
@@ -418,9 +461,13 @@ class StreamFallbackMixin:
 
     @staticmethod
     def _send_failure_may_have_delivered(result_or_exc: Any) -> bool:
-        """Return True for timeout failures where retrying may duplicate."""
+        """Return True for timeout failures where retrying may duplicate, or a result the adapter
+        marked ``raw_response["delivery_uncertain"]`` (e.g. a connection reset after the write)."""
         if getattr(result_or_exc, "retryable", None) is True:
             return False
+        raw = getattr(result_or_exc, "raw_response", None)
+        if isinstance(raw, dict) and raw.get("delivery_uncertain"):
+            return True
         error = str(getattr(result_or_exc, "error", None) or result_or_exc).lower()
         name = result_or_exc.__class__.__name__.lower()
         return "timeout" in error or "timed out" in error or "timeout" in name

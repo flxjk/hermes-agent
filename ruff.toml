@@ -471,7 +471,6 @@ select = [
 
 [lint.per-file-ignores]
 "apps/desktop/electron/fixtures/**" = ["TID251"]
-"pm/**" = ["TID251"]
 "tests/pm/**" = ["TID251"]
 # PLW1514: a text-mode open() without an encoding uses the locale codec on Windows (cp1252 on
 # US installs) and corrupts non-ASCII content. Tests exercise locale edge cases on purpose, and

@@ -21,7 +21,6 @@
     "pm/launch.py": 1,
     "pm/paths.py": 1,
     "pm/worker.py": 1,
-    "tools/bot_mode_dm.py": 1,
     "tools/environments/local.py": 1
   },
   "module_sys_path": {
@@ -60,7 +59,6 @@
     "pm/launch.py": "pm must not import hermes_cli",
     "pm/paths.py": "pm must not import hermes_cli; the Docker tool stage ships without it",
     "pm/worker.py": "pm must not import hermes_cli",
-    "tools/bot_mode_dm.py": "__main__ block run by path: needs the root on sys.path before it can import Hermes",
     "tools/environments/local.py": "keeps the unresolved spelling for Windows path aliases"
   }
 }

@@ -113,7 +113,8 @@ def load_completed_results(prefix: str = "") -> dict:
                 continue
             session = ProcessSession(
                 **{key: record[key] for key in _RESULT_FIELDS},
-                exited=True, output_buffer=record["output"],
+                # Receipts written before processes carried a sandbox are a local activity's.
+                sandbox_key=record.get("sandbox_key", ""), exited=True, output_buffer=record["output"],
             )
             session._completion_event.set()
             results[session.id] = session
