@@ -124,7 +124,6 @@ def test_detached_cron_attempt_must_finish_before_data_removal(layout, monkeypat
     from cron import executions
 
     _, _, data = layout
-    monkeypatch.setattr(executions, "_emit_execution_state", lambda *args, **kwargs: None)
     record = executions.create_execution("temporary-job", source="manual")
     if terminal:
         executions.finish_execution(record["id"], success=True)

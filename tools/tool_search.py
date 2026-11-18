@@ -143,10 +143,7 @@ _DIRECT_SURFACE_TOOLSETS = CLIENT_SURFACE_TOOLSETS | TOOLSET_SESSION_PLATFORMS.k
 # list in DEFAULT_CONFIG so config discovery and runtime behavior cannot drift. An explicit
 # ``defer`` list replaces this wholesale ([] = everything eager). ``clarify`` is deliberately
 # absent: A/B showed deferring it collapsed structured-clarify usage (18/18 -> 7/18) — the
-# ask-the-user affordance must be ambient, a stub is not enough. ``manage_connections`` is
-# deferred only because its catalog line names both of its jobs: with the old first sentence a
-# weak model installed MCP servers through the terminal (18/20 -> 10/20); with the line naming
-# MCP installs it matched eager (18/20, evals/tts_connections_deferral). Keep that sentence.
+# ask-the-user affordance must be ambient, a stub is not enough.
 _DEFAULT_DEFERRED_TOOLS = frozenset(DEFAULT_CONFIG["tools"]["tool_search"]["defer"])
 
 
@@ -235,7 +232,7 @@ def _bridge_schema(name: str, description: str, properties: dict[str, Any],
 _CONNECTIONS_HINT = (
     " Searches also cover the user's connected app accounts, whose tools are hosted and so "
     "never listed here (results named `connectors__<app>__<tool>`); `manage_connections` checks "
-    "or connects an account and installs MCP servers.")
+    "or connects an account.")
 
 
 def _search_description(deferred_count: int, listing: Optional[str], listing_form: str,
@@ -446,7 +443,6 @@ def dispatch_tool_search(args: dict[str, Any], *, current_tool_defs: list[dict[s
     queries, err = _string_list_arg(args, "queries", dedupe=False, max_items=_MAX_QUERIES_PER_CALL,
                                     retry_hint="Retry with fewer, more targeted queries.")
     if err:
-        _record_search_metric(current_tool_defs, hits=0, outcome="error")
         return err
     raw_limit = args.get("limit")
     limit = (config.search_default_limit if raw_limit is None
@@ -480,20 +476,7 @@ def dispatch_tool_search(args: dict[str, Any], *, current_tool_defs: list[dict[s
                                "results": results, "tools": tools_map}
     if hosted_failure:
         payload["connectors"] = connectors_unavailable(hosted_failure, verb="searched")
-    _record_search_metric(current_tool_defs, catalog=catalog, hits=len(tools_map),
-                          outcome="connector_unavailable" if hosted_failure else "hits" if tools_map else "no_hits")
     return json.dumps(payload, ensure_ascii=False)
-
-
-def _record_search_metric(current_tool_defs: list[dict[str, Any]], *, hits: int, outcome: str,
-                          catalog: Optional[list[CatalogEntry]] = None) -> None:
-    """One ``hermes.tool_search.count`` row: which corpora the search read, never the query."""
-    from hermes_cli.observability.shared_metrics_events import record_tool_search
-
-    local = bool(catalog if catalog is not None else _deferrable_in(current_tool_defs))
-    hosted = connections_in_scope(current_tool_defs)
-    scope = "both" if local and hosted else "connector" if hosted else "local"
-    record_tool_search(scope=scope, hits=hits, outcome=outcome)
 
 
 def dispatch_tool_describe(args: dict[str, Any], *, current_tool_defs: list[dict[str, Any]],

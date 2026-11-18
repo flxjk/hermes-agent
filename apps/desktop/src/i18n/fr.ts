@@ -23,7 +23,6 @@ import { frPluginUpdate } from './fr_plugin_update'
 import { frPluginUpdateAll } from './fr_plugin_update_all'
 import { frPreviewWeb } from './fr_preview_web'
 import { frProjects } from './fr_projects'
-import { frSharedMetrics } from './fr_shared_metrics'
 import { frThemePicker } from './fr_theme_picker'
 import { frUpdateChannel } from './fr_update_channel'
 import { introFr } from './intro-fr'
@@ -34,7 +33,6 @@ export const frOverrides = {
     lookupFailed: "Impossible de retrouver ce groupe sur la passerelle. Réessayez.",
     missing: "Cette discussion de groupe n’existe plus."
   },
-  sharedMetrics: frSharedMetrics,
   firstRun: frFirstRun,
   intro: introFr,
   connectors: frConnectorCard,

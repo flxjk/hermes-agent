@@ -37,7 +37,7 @@ def stale_tcc_grant_hint(*missing: str) -> str:
             f"driver's signature): run `{resets}`, then `hermes computer-use permissions grant`.")
 
 def _child_env() -> dict[str, str]:
-    """cua-driver child env (telemetry policy + provider secrets stripped); ``os.environ`` on import error.
+    """cua-driver child env (provider secrets stripped); ``os.environ`` on import error.
 
     cua-driver is a third-party binary — it must never inherit provider API keys (#53503/#55709/#58889
     lineage). Each layer degrades gracefully so permission probes never break on a helper import error.

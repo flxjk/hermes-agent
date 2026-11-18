@@ -22,7 +22,6 @@ from typing import Any, Dict, Iterator, List, Optional
 from hermes_constants import get_hermes_home
 from hermes_time import now as _hermes_now
 from cron.constants import CLAIM_TTL_INACTIVITY_HEADROOM
-from hermes_cli.observability.shared_metrics_gateway import record_cron_finish
 
 logger = logging.getLogger(__name__)
 
@@ -146,18 +145,6 @@ def _fetch(conn: sqlite3.Connection, execution_id: str) -> Optional[dict[str, An
     return dict(row) if row is not None else None
 
 
-def _emit_execution_state(
-    record: Optional[dict[str, Any]], *, delivery_outcome: Optional[str] = None
-) -> None:
-    """Project durable state to monitoring without affecting ledger behavior."""
-    try:
-        from agent.monitoring.cron_health import emit_execution_state
-
-        emit_execution_state(record, delivery_outcome=delivery_outcome)
-    except Exception:
-        pass
-
-
 def _process_start_time(pid: int) -> Optional[int]:
     try:
         from gateway.status import get_process_start_time
@@ -264,7 +251,6 @@ def create_execution(
              _process_start_time(pid), now, canonical_instant(scheduled_instant)),
         )
         record = _fetch(conn, execution_id)
-    _emit_execution_state(record)
     return record  # type: ignore[return-value]
 
 
@@ -295,7 +281,6 @@ def mark_execution_handoff_pending(execution_id: str) -> Optional[dict[str, Any]
         if cur.rowcount != 1:
             return None
         record = _fetch(conn, execution_id)
-    _emit_execution_state(record)
     return record
 
 
@@ -321,7 +306,6 @@ def adopt_claimed_execution(execution_id: str) -> Optional[dict[str, Any]]:
         if cur.rowcount != 1:
             return None
         record = _fetch(conn, execution_id)
-    _emit_execution_state(record)
     return record
 
 
@@ -340,7 +324,6 @@ def mark_execution_running(execution_id: str) -> Optional[dict[str, Any]]:
         if cur.rowcount != 1:
             return None
         record = _fetch(conn, execution_id)
-    _emit_execution_state(record)
     return record
 
 
@@ -370,8 +353,6 @@ def finish_execution(
             return None
         _prune_unlocked(conn)
         record = _fetch(conn, execution_id)
-    _emit_execution_state(record, delivery_outcome=delivery_outcome)
-    record_cron_finish(record, delivery_outcome)
     return record
 
 
@@ -399,7 +380,6 @@ def record_missed_occurrences(
         )
         _prune_unlocked(conn)
         record = _fetch(conn, execution_id)
-    _emit_execution_state(record)
     return record
 
 
@@ -421,8 +401,6 @@ def recover_receipted_execution(execution_id, job_id, *, success, error=None, de
              delivery_outcome, execution_id))
         _prune_unlocked(conn)
         record = _fetch(conn, execution_id)
-    _emit_execution_state(record, delivery_outcome=delivery_outcome)
-    record_cron_finish(record, delivery_outcome)
     return record
 
 
@@ -492,7 +470,6 @@ def recover_interrupted_executions() -> int:
     process is not killed)."""
     now = _hermes_now().isoformat()
     changed = 0
-    recovered: list[dict[str, Any]] = []
     # Derived on the first live-owned row only: the bound reads config, and the idle gateway
     # tick must stay config-free (tests/cron/test_idle_tick_config_skip.py).
     stale_after: Optional[float] = None
@@ -551,14 +528,8 @@ def recover_interrupted_executions() -> int:
                  row["claimed_at"], row["progress_at"]),
             )
             changed += cur.rowcount
-            if cur.rowcount:
-                record = _fetch(conn, row["id"])
-                if record is not None:
-                    recovered.append(record)
         if changed:
             _prune_unlocked(conn)
-    for record in recovered:
-        _emit_execution_state(record)
     return changed
 
 
@@ -611,9 +582,7 @@ def terminalize_dead_owner(execution_id: str, *, reason: str) -> bool:
         )
         if cur.rowcount != 1:
             return False
-        record = _fetch(conn, execution_id)
         _prune_unlocked(conn)
-    _emit_execution_state(record)
     return True
 
 
@@ -631,9 +600,7 @@ def give_up_execution(execution_id: str, *, reason: str) -> bool:
             (now, reason, str(execution_id), _PROCESS_ID, os.getpid()))
         if cur.rowcount != 1:
             return False
-        record = _fetch(conn, str(execution_id))
         _prune_unlocked(conn)
-    _emit_execution_state(record)
     return True
 
 

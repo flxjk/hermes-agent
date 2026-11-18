@@ -138,7 +138,6 @@ def test_tick_on_unwritable_store_returns_cleanly_without_dispatch(cron_store, m
 
 @pytest.mark.parametrize("site,exc,ledger_fails", [
     ("claim_job_for_fire", RuntimeError, False),
-    ("note_cron_execution", RuntimeError, False),
     # Full disk: the executions.db write fails too; the store-unwritable skip must not raise.
     ("claim_job_for_fire", OSError, True),
 ])

@@ -56,11 +56,9 @@ def _start_legacy_parent_watchdog(parent_pid: int, *, poll_s: float = 2.0, grace
         deadline = time.monotonic() + grace_s
         while _in_flight.is_set() and time.monotonic() < deadline:
             time.sleep(0.05)
-        from hermes_cli.observability.shared_metrics_process import flush_before_hard_exit
-        flush_before_hard_exit()  # os._exit skips the opt-in metrics runtimes' atexit flush (bounded)
         os._exit(0)
 
-    # health: allow HX012 -- the loop reads getppid(), flushes the opt-in metrics and calls os._exit
+    # health: allow HX012 -- the loop reads getppid() and calls os._exit
     threading.Thread(target=_loop, daemon=True, name="slash-legacy-parent-watchdog").start()
 
 
@@ -179,7 +177,6 @@ def main():
                         compact=True, resume=args.session_key, verbose=False)
     if args.base_url:  # a seed, not launch policy: HermesCLI seeds the default provider's model.base_url (#141953)
         cli.base_url = args.base_url
-    cli._slash_metrics_surface = None  # the TUI/Desktop client already counted the typed command
     cli.is_slash_worker = True
     # Spurious stdin-EOF recovery (same shared-file-description O_NONBLOCK issue as the gateway entry
     # point — any child inheriting fd 0 can flip the flag).

@@ -22,7 +22,6 @@ import { dePluginUpdate } from './de_plugin_update'
 import { dePluginUpdateAll } from './de_plugin_update_all'
 import { dePreviewWeb } from './de_preview_web'
 import { deProjects } from './de_projects'
-import { deSharedMetrics } from './de_shared_metrics'
 import { deThemePicker } from './de_theme_picker'
 import { deUpdateChannel } from './de_update_channel'
 import { defineLocale, type TranslationOverrides } from './define-locale'
@@ -34,7 +33,6 @@ export const deOverrides = {
     lookupFailed: "Diese Gruppe konnte auf dem Gateway nicht gefunden werden. Versuche es erneut.",
     missing: "Dieser Gruppenchat existiert nicht mehr."
   },
-  sharedMetrics: deSharedMetrics,
   firstRun: deFirstRun,
   intro: introDe,
   connectors: deConnectorCard,

@@ -15,10 +15,10 @@ from hermes_cli.web_routers._common import (
     REDACTED_CREDENTIAL_WRITE_DETAIL, config_scoped_to_thread, http_failure,
     is_redacted_credential_preview, redacted_credential_preview, scoped_to_thread,
 )
-from hermes_cli.config_backend import CONFIG_MUTATION_LOCK, refusing_locked_omissions
-from hermes_cli.web_deps import late
+from hermes_cli.config_backend import refusing_locked_omissions
+from hermes_cli.web_deps import LateState, late
 from hermes_cli.web_server_config import (
-    _denormalize_config_from_web, _normalize_config_for_web, _schema_with_dynamic_provider_options,
+    _apply_main_model_assignment, _denormalize_config_from_web, drop_model_key, _normalize_config_for_web, _schema_with_dynamic_provider_options,
     _validated_main_model_selection,
 )
 from hermes_cli.web_server_profiles import (
@@ -44,6 +44,7 @@ load_env = late("load_env", "hermes_cli.config")
 remove_env_value = late("remove_env_value", "hermes_cli.config")
 save_config = late("save_config", "hermes_cli.config")
 save_env_value = late("save_env_value", "hermes_cli.config")
+_CONFIG_MUTATION_LOCK = LateState("_CONFIG_MUTATION_LOCK")
 
 # Simple rate limiter for the reveal endpoint
 _reveal_timestamps: list[float] = []
@@ -129,7 +130,7 @@ async def update_config(
             # schema (``custom_providers``, ``agent.personalities``, ...) are not
             # in the PUT body, so deep-merge incoming over disk rather than
             # full-replace — the frontend can only overwrite what it sends.
-            with CONFIG_MUTATION_LOCK:
+            with _CONFIG_MUTATION_LOCK:
                 # Strict read: the merge below builds a new dict, so a swallowed read error here
                 # would save the PUT body alone over the whole file.
                 existing = require_readable_config_before_write()
@@ -339,19 +340,14 @@ async def set_env_var(body: EnvVarUpdate, profile: Optional[str] = None):
     if is_redacted_credential_preview(body.value):
         raise HTTPException(status_code=400, detail=REDACTED_CREDENTIAL_WRITE_DETAIL)
     with _env_write_errors("PUT /api/env failed"):
-        return await scoped_to_thread(body.profile or profile, lambda: _save_env_credential(body.key, body.value, body.provider_setup))
+        return await scoped_to_thread(body.profile or profile, lambda: _save_env_credential(body.key, body.value))
 
 
-def _save_env_credential(key: str, value: str, provider_setup: bool = False) -> Any:
-    """Save under the request's profile scope; a new provider API key also counts as a provider setup."""
-    from hermes_cli.config import load_env
+def _save_env_credential(key: str, value: str) -> Any:
+    """Save under the request's profile scope."""
     from hermes_cli.credential_lifecycle import save_provider_env_credential
-    from hermes_cli.observability.shared_metrics_setup import record_api_key_saved, web_setup_surface
 
-    previous = load_env().get(key)
-    result = save_provider_env_credential(key, value)
-    record_api_key_saved(key, value, previous, web_setup_surface(), connecting=provider_setup)
-    return result
+    return save_provider_env_credential(key, value)
 
 
 # Live credential probes keyed by env var: (url, auth) where auth is "bearer"
@@ -720,9 +716,8 @@ def _write_custom_endpoint(cfg: dict[str, Any], body: CustomEndpointUpdate) -> t
     cfg["providers"] = providers
 
     if body.make_default:
-        from hermes_cli.model_assignment import apply_main_model_assignment, drop_model_key
         result = _validated_main_model_selection(cfg, endpoint_id, model, base_url)
-        cfg["model"] = apply_main_model_assignment(cfg.get("model", {}), result)
+        cfg["model"] = _apply_main_model_assignment(cfg.get("model", {}), result)
         if entry.get("key_env") and isinstance(cfg["model"], dict):
             cfg["model"]["key_env"] = entry["key_env"]
             drop_model_key(cfg["model"], "api_key")
@@ -752,44 +747,29 @@ def upsert_custom_endpoint(body: CustomEndpointUpdate, profile: Optional[str] = 
     """Create or update a v12+ ``providers`` custom endpoint entry."""
     with http_failure("POST /api/providers/custom-endpoints failed", 500, detail="Failed to save custom endpoint"):
         # Sync-def endpoints run on worker threads: the load→mutate→save span
-        # holds CONFIG_MUTATION_LOCK so a concurrent config autosave cannot
+        # holds _CONFIG_MUTATION_LOCK so a concurrent config autosave cannot
         # drop this write (or vice versa).
-        with _config_profile_scope(profile), CONFIG_MUTATION_LOCK:
+        with _config_profile_scope(profile), _CONFIG_MUTATION_LOCK:
             cfg = load_config()
-            providers = cfg.get("providers")
-            created = _resolve_custom_endpoint_entry(
-                providers if isinstance(providers, dict) else {}, body.id or body.name)[1] is None
             endpoint_id, _entry = _write_custom_endpoint(cfg, body)
             # make_default: the model route and the provider definition it names are one change,
             # so a lock on either refuses both (never a model.provider naming an omitted entry).
             with refusing_locked_omissions(*_ROUTE_SECTIONS) if body.make_default else contextlib.nullcontext():
                 save_config(cfg)
             response = _custom_endpoint_response(cfg)
-            from hermes_constants import get_hermes_home
-            home = get_hermes_home()
-        if created:  # editing an endpoint that exists sets nothing new up
-            _record_custom_endpoint_setup(home)
         response["ok"] = True
         response["id"] = endpoint_id
         return response
 
 
-def _record_custom_endpoint_setup(home: Any) -> None:
-    """Counted after the config lock is released (a cold metrics runtime must not stall writers)."""
-    from hermes_cli.observability.shared_metrics_setup import record_provider_setup_done, web_setup_surface
-
-    record_provider_setup_done(web_setup_surface(), "custom", hermes_home=home, background=True)
-
-
 @router.post("/api/providers/custom-endpoints/{endpoint_id}/activate")
 def activate_custom_endpoint(endpoint_id: str, profile: Optional[str] = None):
     """Set a configured custom endpoint as the default model provider."""
-    from hermes_cli.model_assignment import apply_main_model_assignment, drop_model_key
     with http_failure(
         f"POST /api/providers/custom-endpoints/{endpoint_id}/activate failed", 500,
         detail="Failed to activate custom endpoint",
     ):
-        with _config_profile_scope(profile), CONFIG_MUTATION_LOCK:  # RMW span
+        with _config_profile_scope(profile), _CONFIG_MUTATION_LOCK:  # RMW span
             cfg = load_config()
             stored_key, entry = _resolve_custom_endpoint_entry(cfg.get("providers"), endpoint_id)
             if entry is None:
@@ -813,7 +793,7 @@ def activate_custom_endpoint(endpoint_id: str, profile: Optional[str] = None):
             if not model or not base_url:
                 raise HTTPException(status_code=400, detail="custom endpoint is incomplete")
 
-            model_cfg = apply_main_model_assignment(
+            model_cfg = _apply_main_model_assignment(
                 cfg.get("model", {}), _validated_main_model_selection(cfg, provider_key, model, base_url))
             if entry.get("key_env"):
                 model_cfg["key_env"] = entry["key_env"]
@@ -842,7 +822,7 @@ def delete_custom_endpoint(endpoint_id: str, profile: Optional[str] = None):
         f"DELETE /api/providers/custom-endpoints/{endpoint_id} failed", 500,
         detail="Failed to delete custom endpoint",
     ):
-        with _config_profile_scope(profile), CONFIG_MUTATION_LOCK:  # RMW span
+        with _config_profile_scope(profile), _CONFIG_MUTATION_LOCK:  # RMW span
             cfg = load_config()
             providers = cfg.get("providers")
             stored_key, entry = _resolve_custom_endpoint_entry(providers, endpoint_id)

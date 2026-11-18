@@ -231,7 +231,6 @@ class CellAuthority:
 
     def _invoke(self, tool_name: str, tool_args: dict) -> str:
         from model_tools import handle_function_call
-        from tools.file_tools_read_tracking import programmatic_file_read
         previous = None
         if self._callbacks:
             try:
@@ -241,8 +240,7 @@ class CellAuthority:
             except Exception:
                 previous = None
         try:
-            with programmatic_file_read():
-                return handle_function_call(tool_name, tool_args, task_id=self.task_id)
+            return handle_function_call(tool_name, tool_args, task_id=self.task_id)
         finally:
             if previous is not None:
                 try:
@@ -392,10 +390,6 @@ def _resolve_owner(task_id: str) -> str:
     except Exception:
         session_key = ""
     owner = session_key or (task_id or "")
-    from tools.environments.sandbox_scope import current_sandbox_key
-    if sandbox := current_sandbox_key():
-        # Session keys are not unique across hosted agents; a kernel belongs to one agent's sandbox.
-        owner = f"{sandbox}:{owner}"
     try:
         from agent.delegation_context import is_delegated_child_context
         if is_delegated_child_context():

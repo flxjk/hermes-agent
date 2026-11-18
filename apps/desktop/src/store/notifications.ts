@@ -3,11 +3,25 @@ import { atom } from 'nanostores'
 import { translateNow } from '@/i18n'
 import { isOutOfSyncRpcParams } from '@/lib/gateway-rpc'
 import { servedByHermesCloud } from '@/lib/hermes-cloud-host'
-import { isTimeoutError } from '@/lib/with-timeout'
-import { type ErrorToastCategory, recordFriction } from '@/store/desktop-metrics'
 import { requestBackendRestart, requestRoute } from '@/store/recovery-requests'
 
 export type NotificationKind = 'error' | 'warning' | 'info' | 'success'
+
+/** Closed, code-defined error codes `summarizeErrorMessage` maps a toast onto; never message text. */
+export type ErrorToastCategory =
+  | 'api_key_missing'
+  | 'api_key_rejected'
+  | 'disk_full'
+  | 'gateway_auth_failed'
+  | 'method_not_allowed'
+  | 'microphone_permission'
+  | 'other'
+  | 'pool_slot_timeout'
+  | 'restart_required'
+  | 'rpc_out_of_sync'
+  | 'storage_failure'
+  | 'timeout'
+  | 'unclassified'
 
 export interface NotificationAction {
   label: string
@@ -154,7 +168,7 @@ export const RECOVERY_ACTIONS = {
 const STORAGE_CODE_RE = /['"]code['"]\s*:\s*['"](storage_[a-z_]+|disk_full)['"]/i
 
 interface ErrorSummaryRule {
-  /** The toast's error category for friction telemetry (a closed code-defined set, never the text). */
+  /** The toast's error category (a closed code-defined set, never the text). */
   category: ErrorToastCategory
   test: (msg: string) => boolean
   summarize: (msg: string) => string
@@ -330,15 +344,11 @@ export function readableError(
 }
 
 export function notify(input: NotificationInput): string {
-  return showNotification(input, input.kind === 'error' ? 'other' : null)
+  return showNotification(input)
 }
 
-function showNotification(input: NotificationInput, errorCategory: ErrorToastCategory | null): string {
+function showNotification(input: NotificationInput): string {
   const kind = input.kind ?? 'info'
-
-  if (errorCategory) {
-    recordFriction('error_toast', errorCategory)
-  }
 
   const id = input.id ?? `${Date.now()}-${notificationCounter++}`
 
@@ -398,9 +408,6 @@ export function notifyError(
   const readable = readableError(error, fallback)
   logErrorToDesktopLog(error, fallback)
 
-  const category: ErrorToastCategory =
-    readable.category === 'unclassified' && isTimeoutError(error) ? 'timeout' : readable.category
-
   return showNotification(
     {
       action: options.action ?? readable.action,
@@ -410,8 +417,7 @@ export function notifyError(
       title: fallback,
       message: readable.message,
       detail: readable.detail
-    },
-    category
+    }
   )
 }
 

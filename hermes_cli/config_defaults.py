@@ -965,6 +965,7 @@ DEFAULT_CONFIG = {
         "status_bar": {
             "fields": [],
         },
+        "copy_shortcut": "auto",  # "auto" (platform default) | ctrl_c | ctrl_shift_c | disabled
         # Petdex animated mascot (github.com/crafter-station/petdex): cosmetic sprite across
         # CLI/TUI/desktop, managed with `hermes pets`. No effect on prompt caching.
         "pet": {
@@ -1995,7 +1996,7 @@ DEFAULT_CONFIG = {
             # tool eager. The runtime fallback in tools/tool_search.py derives from this value.
             "defer": [
                 "computer_use", "session_search", "image_generate",
-                "todo_list", "process_manage", "cronjob_manage", "browser_vault", "text_to_speech", "manage_connections",
+                "todo_list", "process_manage", "cronjob_manage", "browser_vault",
                 # Desktop GUI surface (desktop_ui, project and catalog toolsets)
                 "drive_preview", "gui_tour", "desktop_preview", "annotate_preview", "manage_catalog",
                 "show_tip", "desktop_project", "close_terminal",
@@ -2051,29 +2052,6 @@ DEFAULT_CONFIG = {
         # Force IPv4. With broken/unreachable IPv6, Python tries AAAA first and hangs for the full
         # TCP timeout before falling back. True skips IPv6 entirely.
         "force_ipv4": False,
-    },
-    # Gateway monitoring: service health + redacted operational diagnostics exported over OTLP to an
-    # operator endpoint (OTEL Collector, DataDog, ...). Content-free by construction: no prompts,
-    # messages, tool args/results, session history, usage analytics, audit logs, or trajectories.
-    # Nothing is collected or sent until enabled with an endpoint.
-    "monitoring": {
-        # Stable install identifier on exported signals so operators can tell instances apart. "" =
-        # mint a fresh UUID on first use; clear it to rotate. Carries no account identity.
-        "install_id": "",
-        "gateway_health_export": {  # Gateway health & diagnostics export.
-            "enabled": False,
-            "metrics_enabled": True,
-            "diagnostic_events_enabled": True,
-            "warning_error_events_enabled": True,
-            "export_interval_seconds": 60,
-            "logs_export_interval_seconds": 5,
-            "resource_attributes": {
-                "service.name": "hermes-gateway", "deployment.environment.name": "production"
-            },
-        },
-        # OTLP destination. headers_env maps header names to ENVIRONMENT VARIABLE NAMES (never
-        # secret values); values are read from the environment at export time.
-        "export": {"otlp": {"enabled": False, "endpoint": "", "headers_env": {}}},
     },
     # Native hosted-room Discussion ceilings, shared by all members per discussion.
     # Positive integers only (no unlimited/0). Read from the root owner's config at service
@@ -2188,8 +2166,8 @@ DEFAULT_CONFIG = {
         "message_timestamps": {"enabled": False},
         # Max bytes of inbound image/audio/video the gateway buffers into RAM and caches to disk.
         # Media is read fully into memory first, so unbounded uploads (Discord Nitro: 500 MB) or
-        # huge remote URLs (incl. image URLs in agent replies) can OOM-kill constrained deployments.
-        # Enforced in gateway/platforms/base.py for every adapter. 0 = no cap. Default 128 MiB.
+        # huge remote URLs can OOM-kill constrained deployments. Enforced in
+        # gateway/platforms/base.py for every adapter. 0 = no cap. Default 128 MiB.
         "max_inbound_media_bytes": 134217728,
         # Let adapters read HTTP_PROXY/HTTPS_PROXY/NO_PROXY/SSL_CERT_FILE from the environment and
         # auto-detect generic/macOS system proxies. False when the gateway inherits a proxy it must
@@ -2304,21 +2282,6 @@ DEFAULT_CONFIG = {
         # Desktop first run, root profile only (onboarding_run.py): None = fresh install; true = next launch; false = done
         "run": None,
     },
-    # Privacy-safe aggregate metrics in this profile's local telemetry dir. Collection (`enabled`)
-    # and upload to Nous (`send`) are separate keys that every consent surface sets together; see
-    # website/docs/developer-guide/relay-shared-metrics.md Appendix A for consent/retention.
-    "telemetry": {
-        "shared_metrics": {
-            "enabled": False,
-            # Requires `enabled` (`send` alone logs an error). A package is sent only if its whole
-            # period is inside a recorded consent window.
-            "send": False,
-            # Ingest endpoint (override for staging/local). Deliberately NOT env- overridable.
-            # Non-HTTPS refused unless the host is localhost.
-            "endpoint": "https://telemetry.nousresearch.com/v1/telemetry",
-        },
-    },
-
     "doctor": {
         # Per-probe timeout (seconds) for `hermes doctor --live` real-call probes.
         "live_probe_timeout": 10,
@@ -2520,9 +2483,6 @@ DEFAULT_CONFIG = {
         "placement": "auto",
     },
     "computer_use": {
-        # cua-driver's upstream PostHog telemetry defaults ON; Hermes sets
-        # CUA_DRIVER_RS_TELEMETRY_ENABLED=0 in every child env unless this is true.
-        "cua_telemetry": False,
         # Windows only: opt IN to the per-boot cua-driver-serve logon task. False (default)
         # keeps the driver on-demand — Computer Use starts it per session, exactly as on
         # macOS/Linux, and install/enable flows register no scheduled task (#97389). True

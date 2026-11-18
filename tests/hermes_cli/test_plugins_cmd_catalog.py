@@ -162,17 +162,6 @@ def test_the_catalog_name_you_installed_with_works_for_every_later_verb(world, t
     assert "renamed-plugin" not in pc._get_enabled_set()
 
 
-def test_custom_install_records_an_anonymous_extension_install_and_reinstall_none(world, monkeypatch):
-    import hermes_cli.observability.shared_metrics_events as events
-
-    calls = []
-    monkeypatch.setattr(events, "record_extension_install", lambda **kw: calls.append(kw))
-    assert pc.dashboard_install_plugin(world["repo"].as_uri(), force=False, enable=False)["ok"]
-    assert pc.dashboard_install_plugin("", force=True, enable=False, catalog_name="cat-plugin")["ok"]
-
-    assert calls == [{"kind": "plugin", "source": "local", "name": None, "outcome": "success"}]
-
-
 def test_owner_repo_hash_subdir_shorthand_resolves_like_the_catalog_spelling():
     from hermes_cli.plugins_cmd import _resolve_git_url
     assert _resolve_git_url("plastic-labs/honcho#hermes-plugin-honcho") == (

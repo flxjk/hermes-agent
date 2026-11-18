@@ -54,8 +54,6 @@ export const PROFILE_SCOPED_PREFIXES = [
   "/api/dashboard/font",
   "/api/dashboard/plugins",
   "/api/plugins/", // a plugin's backend: the selected profile's copy, as its bundle is (PLG-3)
-  // The shared-metrics answer is one per profile (telemetry.shared_metrics in its config.yaml).
-  "/api/shared-metrics",
 ];
 
 // A scheme (``https:``) or a protocol-relative ``//host`` prefix: the request

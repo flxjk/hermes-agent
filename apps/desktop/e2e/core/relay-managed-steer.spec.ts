@@ -25,11 +25,6 @@ import {
 import { assertTranscriptOracle, installDuplicateSampler, type OracleTarget } from './oracle'
 import { gate, startScriptedProvider } from './provider'
 
-const RELAY_MANAGED_EXECUTION = `telemetry:
-  shared_metrics:
-    enabled: true
-`
-
 const nonce = Math.random()
   .toString(36)
   .slice(2, 8)
@@ -55,7 +50,7 @@ function stopButton(page: Page) {
 test('steer and queue stay live under Relay managed execution', async () => {
   const provider = await startScriptedProvider()
   const sandbox = createCoreSandbox('relay-steer')
-  writeProviderHome(sandbox.hermesHome, provider.url, RELAY_MANAGED_EXECUTION)
+  writeProviderHome(sandbox.hermesHome, provider.url)
   const { app, page } = await launchCoreApp(coreAppEnv(sandbox))
   const ws = recordWebSockets(page)
 

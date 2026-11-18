@@ -20,7 +20,6 @@ from agent.turn_context import extract_api_content_sidecar
 from gateway.config import Platform
 from gateway.platforms.base import EphemeralReply
 from gateway.platforms.event import MessageEvent, MessageType
-from gateway.run_topics import TopicLinkedElsewhere
 from gateway.session import SessionSource, build_session_key, is_shared_multi_user_session
 from gateway.session_transcript import TranscriptReadError
 from gateway.slash_commands_branch_thread import (
@@ -511,7 +510,6 @@ class GatewaySessionCommandsMixin:
             session_entry.session_id, truncated, active_only=True, reject_active_turn_lease=True):
             return t("gateway.retry.failed_unchanged")
         session_entry.last_prompt_tokens = 0  # transcript was truncated
-        self._record_model_friction("retry", source, session_entry.session_id)
         # The re-sent turn is the /retry event's own turn, built on its authenticated source: carry
         # that event's native callback to it, or admission refuses it under multiplex (#139040).
         from gateway.session_ingress_context import carry_callback
@@ -571,7 +569,6 @@ class GatewaySessionCommandsMixin:
         def committed():
             self.session_store._clear_dirty_transcript(session_id)
             session_entry.last_prompt_tokens = 0  # transcript was truncated
-            self._record_model_friction("retry", event.source, session_id)
         rewrite = retry_admission.RetryRewrite(db=db, session_id=session_id, source=event.source,
                                                write=write, on_commit=committed)
         turn = MessageEvent(
@@ -635,16 +632,6 @@ class GatewaySessionCommandsMixin:
             return QUEUE_FULL_REPLY
         return None
 
-    def _record_model_friction(self, signal: str, source, session_id: str, turns: int = 1) -> None:
-        """Slash dispatch does not install the routed profile's scope, so a multiplexed runner
-        names the owning home explicitly."""
-        from hermes_cli.observability.shared_metrics_model import record_model_friction
-        home = None
-        if getattr(getattr(self, "config", None), "multiplex_profiles", False):
-            with contextlib.suppress(Exception):
-                home = self._resolve_profile_home_for_source(source)
-        record_model_friction(signal, session_id=session_id, hermes_home=home, turns=turns)
-
     async def _handle_undo_command(self, event: MessageEvent) -> str:
         """Handle /undo [N] — back up N user turns (default 1), soft-deleting the truncated rows and
         echoing the backed-up text; evicts the cached agent so the next turn rebuilds from the
@@ -662,7 +649,6 @@ class GatewaySessionCommandsMixin:
         if result is None:
             return t("gateway.undo.nothing")
         session_entry.last_prompt_tokens = 0  # transcript was truncated
-        self._record_model_friction("undo", source, session_entry.session_id, result.get("turns_undone") or 1)
         try:
             # The cache is keyed by the profile-namespaced key; a bare build_session_key(source)
             # yields ``agent:main:…`` and misses for every secondary profile.
@@ -1130,11 +1116,7 @@ class GatewaySessionCommandsMixin:
             )
             if not new_entry:
                 return t("gateway.resume.switch_failed")
-            try:
-                await self._follow_telegram_topic_switch(source, new_entry, reason="resume-command",
-                                                         departed=current_entry)
-            except TopicLinkedElsewhere as refused:  # bound elsewhere since the check: route put back
-                return str(refused)
+            await self._follow_telegram_topic_switch(source, new_entry, reason="resume-command")
         if local_owner is not None and authority is not None:  # a Desktop still viewing it follows it
             follow_hand_off(authority, source, session_key, authority.logical_owner(target_id), local_owner)
         # Conversation boundary: all conversation-scoped state + security state in one funnel call.
@@ -1317,12 +1299,8 @@ class GatewaySessionCommandsMixin:
             await self.async_session_store.get_or_create_session(dest_source)
         with self._telegram_topic_publication(dest_source):
             new_entry = await self.async_session_store.switch_session(dest_key, new_session_id)
-            try:
-                if new_entry and in_place:
-                    await self._follow_telegram_topic_switch(dest_source, new_entry, reason="branch-command",
-                                                             departed=current_entry)
-            except TopicLinkedElsewhere as refused:  # bound elsewhere since the switch: route put back
-                return str(refused)
+            if new_entry and in_place:
+                await self._follow_telegram_topic_switch(dest_source, new_entry, reason="branch-command")
         if not new_entry:
             return t("gateway.branch.switch_failed")
         self._clear_session_boundary_security_state(dest_key)

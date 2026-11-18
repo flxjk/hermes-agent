@@ -37,8 +37,6 @@ from gateway.session import (
     neutralize_untrusted_inline_text,
 )
 from gateway.turn_lease import TurnLeaseTimeoutError
-from hermes_cli.observability.shared_metrics_busy import (
-    note_busy_admitting, note_busy_outcome, settle_busy_arrival, stamp_busy_arrival)
 from typing import Any, Dict, List, Optional, Tuple
 
 if TYPE_CHECKING:  # string annotations only; never imported at runtime (cycle)
@@ -264,8 +262,7 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
         with suppress(Exception):
             _estop_key = self._session_key_for_source(source)
             _estop_state = self._peek_session_state(_estop_key)
-            if _estop_state is not None and _estop_state.persistent.update_prompt_pending \
-                    and not self._hm_update_reply_refused(event):
+            if _estop_state is not None and _estop_state.persistent.update_prompt_pending:
                 return True
             # A running session covers steering plus pending clarify / tool approvals it holds.
             if self._is_session_running(_estop_key):
@@ -318,14 +315,6 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
             return str(e)
         return None
 
-    def _hm_update_reply_refused(self, event: MessageEvent) -> bool:
-        """Whether *event*'s sender may not answer the pending ``/update`` prompt (not its opener nor
-        an admin of the chat scope): their message is ordinary chat, never the update answer."""
-        from gateway.approval_actor import update_prompt_refusal
-        from gateway.slash_access import policy_for_runner_source
-        return update_prompt_refusal(event.user_id or event.source.user_id,
-                                     admin_ids=policy_for_runner_source(self, event.source).admin_user_ids) is not None
-
     def _hm_update_prompt_reply(self, event: MessageEvent, _quick_key: str) -> Optional[str]:
         """Consume a reply to a pending ``/update`` prompt (routed to the detached update process via
         ``.update_response``); None when nothing was consumed. Recognized slash commands must bypass
@@ -333,8 +322,6 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
         _up_state = self._peek_session_state(_quick_key)
         if _up_state is None or not _up_state.persistent.update_prompt_pending:
             return None
-        if self._hm_update_reply_refused(event):
-            return None  # another member's message in a shared chat: an ordinary message, not the answer
         # Accept /approve and /deny as shorthand for yes/no
         cmd = event.get_command()
         _recognized_cmd = None
@@ -462,9 +449,8 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
         return refusal_text(requester) if requester else None
 
     def _prompt_admin_ids(self, event: MessageEvent):
-        """The answer policy of the chat *event* arrived in (admins + its slash floor)."""
         from gateway.slash_access import policy_for_runner_source
-        return policy_for_runner_source(self, event.source)
+        return policy_for_runner_source(self, event.source).admin_user_ids
 
     async def _release_pending_clarify(self, pending, source) -> bool:
         """Withdraw *pending* as CANCELLED and retire its card; False if it already settled.
@@ -827,7 +813,6 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
                     and self._effective_busy_text_mode(source) == "queue")):
             return False
         outcome = await self._resolve_busy_steer_or_redirect(event, _quick_key, mode, running_agent)
-        note_busy_outcome(event, outcome)
         await self._busy_interrupt_and_ack(event, _quick_key, adapter, state, running_agent, outcome)
         return bool(outcome.steered or outcome.redirected)
 
@@ -1313,12 +1298,7 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
                 # A message the adapter saw as idle still waits when an earlier queued turn runs
                 # outside its session guard: the running-turn check is the busy test that counts.
                 busy = self._is_session_running(_quick_key) and not getattr(event, "_fifo_only", False)
-                if busy:
-                    stamp_busy_arrival(self._delivery_adapter_for(source), event)
-                try:
-                    return await self._hm_admit_to_fifo(authority, event, source, _quick_key, busy)
-                finally:
-                    settle_busy_arrival(event)  # never admitted, refused or dropped: its fate is known
+                return await self._hm_admit_to_fifo(authority, event, source, _quick_key, busy)
         if (authority is None and not is_internal and not event.get_command()
                 and getattr(self, 'session_authority', None) is not None):
             # Scoped to a home this process does not serve: never fall back to the launch ledger.
@@ -1348,7 +1328,6 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
             return True, None  # a /stop or /new came after its command, as it clears the slot
         # A failed admit stays the authority's answer (refusal notice or turn error), never a
         # pending legacy turn: that would run unadmitted, outside the FIFO's order.
-        note_busy_admitting(event)
         return True, await admit_message(authority, event)
 
     async def _handle_message(self, event: MessageEvent) -> Optional[str]:
@@ -1359,9 +1338,6 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
         if _admitted is None:
             return None
         event, source, is_internal = _admitted
-        if not is_internal:
-            from hermes_cli.observability.shared_metrics_events import record_gateway_slash_command
-            record_gateway_slash_command(event)
         # TERMINAL-DECLINE LATCH TEARDOWN. Deliberately placed AFTER admission,
         # not on the adapter's raw inbound: profile routing, the ignored-channel
         # guard, plugin hooks and user authorization all reject events above,
@@ -1426,8 +1402,6 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
         _claim_state.turn.agent = _AGENT_PENDING_SENTINEL
         _claim_state.turn.event = event
         _claim_state.turn.started_ts = time.time()
-        from hermes_cli.observability.shared_metrics_gateway import start_reply_clock
-        start_reply_clock(source, internal=is_internal)
         self._persist_active_agents()
         _run_generation = self._begin_session_run_generation(_quick_key)
 
@@ -1493,17 +1467,6 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
             snapshot = _otr_state.conversation.one_turn_restore
             _otr_state.conversation.one_turn_restore = None
             self._restore_session_model_override(session_key, snapshot)
-            # The one-turn switch note was persisted with the temporary turn. Add a
-            # one-shot counterpart so the next model does not treat that historical
-            # note as its current identity. The restored model may come from config,
-            # so avoid guessing its display name here.
-            pending_notes = getattr(self, "_pending_model_notes", None)
-            if not isinstance(pending_notes, dict):
-                pending_notes = self._pending_model_notes = {}
-            pending_notes[session_key] = (
-                "[Note: the one-turn model override has ended. The temporary model "
-                "no longer applies; use the current model and provider in your instructions.]"
-            )
         except Exception:
             logger.debug("Failed to restore one-turn model override", exc_info=True)
 
@@ -1688,10 +1651,9 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
             # must still tell the agent the file exists.
             display_name, agent_path = cls._inbound_attachment_display_name(
                 path, names[i] if i < len(names) else "")
-            # Only an adapter that injected the text says so; an unflagged file (LINE, Signal, ...) is not inlined.
             inline_flag = inline_flags[i] if i < len(inline_flags) else None
             context_note = _build_document_context_note(
-                display_name, agent_path, mtype, content_inlined=inline_flag is True,
+                display_name, agent_path, mtype, content_inlined=inline_flag is not False,
             )
             message_text = f"{context_note}\n\n{message_text}"
         return message_text
@@ -1842,10 +1804,7 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
         return await self._prepare_inbound_message_text(**kwargs)
 
     async def _prepare_clarify_reply_text(self, event) -> str:
-        """Raw text or successful voice transcripts. A typed reply to a voice note answers with the typed
-        text the adapter recorded: the replied-to speech and its attachment note are context only."""
-        if typed := getattr(event, "_telegram_replied_voice_typed_text", None):  # adapter-private
-            return typed
+        """Return raw text or successful voice transcripts for a clarify reply."""
         if not self._pending_event_audio_paths(event):
             return (event.text or "").strip()
         _, successful_transcripts = await self._transcribe_pending_audio_event_once(event, "")

@@ -3,8 +3,8 @@
 One record per ``compress_context`` attempt (built from the attempt telemetry seam), per
 micro-compaction pass, per committed proactive tool-result prune, and per Codex-native thread
 compaction Hermes observes. A persistence-detached fork (background review) shares the live session id
-but rewrites only its own throwaway transcript, so it publishes nothing. The payload is flat because OpenTelemetry exporters flatten only top-level
-keys; every categorical field except the free-form ``summarizer_provider`` / ``summarizer_model`` identifiers
+but rewrites only its own throwaway transcript, so it publishes nothing. The payload is flat; every
+categorical field except the free-form ``summarizer_provider`` / ``summarizer_model`` identifiers
 comes from a closed set with an ``other`` fallback; no field carries message, summary, focus-topic, error or
 path text. Publishing never raises into compaction. A committed record also fires the ``post_compaction`` plugin
 hook, so plugins learn about every compaction the model will see without inferring it from history shrinkage.
@@ -12,7 +12,6 @@ hook, so plugins learn about every compaction the model will see without inferri
 
 from __future__ import annotations
 
-import functools
 import logging
 import threading
 import uuid
@@ -51,15 +50,6 @@ _SPLIT_STATUSES = frozenset({
     "not_applicable", "in_place_committed", "rotated_committed", "failed_not_indexed", "aborted",
 })
 _TOKEN_COUNT_METHODS = frozenset({"estimate_rough"})
-# Attempt classes beyond the shared-metrics closed set: guards, Codex route exits, lease races, an engine's
-# empty transcript, and the micro-compaction pass outcomes.
-_EXTRA_FAILURE_CLASSES = frozenset({
-    "blocked:cooldown", "blocked:structural_backoff", "blocked:ineffective", "blocked:unknown",
-    "codex_auto_native", "codex_auto_off", "codex_no_thread", "codex_compaction_failed",
-    "session_ownership_lost", "session_ownership_unreadable", "cooldown_state_unreadable", "empty_transcript",
-    "summary_model_benched",
-    "summarize_failed", "exchange_skipped", "defrag_failed", "stale_generation", "watermark_unavailable",
-})
 # An aborted attempt the compressor ran but deliberately did not commit; other aborts are failures.
 _ABORTED_CLASSES = frozenset({"would_grow", "no_progress", "commit_fence_cancelled"})
 _COMMIT_MODES = frozenset({"in_place_committed", "rotated_committed"})
@@ -93,18 +83,29 @@ _warned_lock = threading.Lock()
 _warned = False
 
 
-@functools.cache
-def _failure_classes() -> frozenset[str]:
-    from hermes_cli.observability.shared_metrics_contract import COMPRESSION_FAILURE_CLASSES
-
-    return COMPRESSION_FAILURE_CLASSES | _EXTRA_FAILURE_CLASSES
-
-
-@functools.cache
-def _skip_classes() -> frozenset[str]:
-    from hermes_cli.observability.shared_metrics_contract import COMPRESSION_SKIP_CLASSES
-
-    return COMPRESSION_SKIP_CLASSES
+# Attempts that ended before anything could fail: another path held the lock, the transcript had
+# nothing summarizable (no LLM call was made), the user stopped it, or a newer attempt replaced it.
+# Counting these as ``failed`` made a session that is simply all protected tail read as broken.
+_SKIP_CLASSES = frozenset({
+    "attempt_superseded", "empty_post_handoff_window", "explicit_interrupt", "insufficient_messages",
+    "lock_contended", "no_compressible_window", "snapshot_stale",
+})
+# The closed failure-class set, plus the attempt classes the counts above cannot express: guards,
+# Codex route exits, lease races, an engine's empty transcript, and the micro-compaction pass
+# outcomes.
+_FAILURE_CLASSES = _SKIP_CLASSES | frozenset({
+    "aux_model_fallback", "commit_fence_cancelled", "empty_transcript", "exception", "feasibility_skip",
+    "no_progress", "none",
+    "other", "pool_saturated", "rollback", "session_split_failed", "stall_deterministic_fallback",
+    "stall_interrupted", "summary_auth_failure", "summary_empty_content_failure", "summary_generation_aborted",
+    "summary_generation_failed", "summary_network_failure", "summary_overload_degraded",
+    "summary_overload_failure", "summary_truncated_failure", "unknown", "would_grow",
+    "blocked:cooldown", "blocked:structural_backoff", "blocked:ineffective", "blocked:unknown",
+    "codex_auto_native", "codex_auto_off", "codex_no_thread", "codex_compaction_failed",
+    "session_ownership_lost", "session_ownership_unreadable", "cooldown_state_unreadable",
+    "summary_model_benched",
+    "summarize_failed", "exchange_skipped", "defrag_failed", "stale_generation", "watermark_unavailable",
+})
 
 
 def _closed(value: Any, allowed: frozenset[str], default: str | None = "other") -> str | None:
@@ -124,7 +125,7 @@ def failure_class(value: Any) -> str:
         return "none"
     if value.startswith(("exception:", "rollback:")):
         value = value.split(":", 1)[0]
-    return value if value in _failure_classes() else "other"
+    return value if value in _FAILURE_CLASSES else "other"
 
 
 def event_name(payload: dict[str, Any]) -> str:
@@ -159,7 +160,7 @@ def _attempt_outcome(commit_status: Any, failure: str, history_rewritten: Any) -
         return "committed"
     if commit_status != "aborted":
         return commit_status if commit_status in _OUTCOMES else "other"
-    if failure in _skip_classes():
+    if failure in _SKIP_CLASSES:
         return "skipped"
     return "aborted" if failure in _ABORTED_CLASSES else "failed"
 

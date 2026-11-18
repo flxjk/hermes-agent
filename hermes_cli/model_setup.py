@@ -18,8 +18,7 @@ def persist_model_selection(model: str, provider: str, *, base_url: str | None =
 
 
 def note_setup_failure(failure_class: str) -> None:
-    """Record why the flow ends without a pick (``"auth"``, ``"no_models"``, ...) for the opt-in
-    provider-setup metric; a no-op outside a tracked ``hermes model`` / setup flow."""
-    from hermes_cli.model_setup_flows_common import _note_setup_failure
+    """Inert compatibility stub for the published model-provider-plugin helper.
 
-    _note_setup_failure(failure_class)
+    It no longer records anything: the opt-in provider-setup metric it fed was removed. Kept
+    because provider plugins' own ``hermes model`` steps call it by name."""

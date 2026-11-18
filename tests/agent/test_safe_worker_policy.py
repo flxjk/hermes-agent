@@ -136,7 +136,7 @@ def test_safe_worker_never_discovers_or_invokes_customizations(tmp_path, mode):
                 reads.append(str(args[0]))
         sys.addaudithook(audit)
         import providers
-        from hermes_cli import plugins, lifecycle
+        from hermes_cli import plugins
         plugins.discover_plugins()
         providers.list_providers()
         from providers.base import ProviderProfile
@@ -147,8 +147,6 @@ def test_safe_worker_never_discovers_or_invokes_customizations(tmp_path, mode):
         manager._middleware.setdefault("probe", []).append(lambda **kw: mark("middleware"))
         manager.invoke_hook("on_session_start")
         manager.invoke_middleware("probe")
-        lifecycle._observe = lambda *a, **kw: mark("observer")
-        lifecycle.invoke_hook("on_session_start")
         from agent import shell_hooks, outbound_webhooks
         shell_hooks._spawn = lambda *a: (mark("shell") or {"returncode": 0, "stdout": "", "stderr": "", "error": None, "timed_out": False})
         outbound_webhooks._enqueue = lambda *a: mark("outbound")
@@ -160,7 +158,7 @@ def test_safe_worker_never_discovers_or_invokes_customizations(tmp_path, mode):
     if mode == "safe":
         assert result == {"events": [], "reads": [], "injected": False}
     else:
-        assert {"plugin-import", "plugin-register", "plugin-hook", "model-providers/nested", "flat", "direct-hook", "middleware", "observer", "shell", "outbound"} <= set(result["events"])
+        assert {"plugin-import", "plugin-register", "plugin-hook", "model-providers/nested", "flat", "direct-hook", "middleware", "shell", "outbound"} <= set(result["events"])
         assert result["reads"] and result["injected"]
 
 

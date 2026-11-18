@@ -156,21 +156,12 @@ async def test_recursive_three_turn_chain_then_human(profiles, monkeypatch, diag
 @pytest.mark.asyncio
 @pytest.mark.parametrize("setting", [None, False, True])
 @pytest.mark.parametrize("diagnostic", [False, True])
-async def test_turn_error_preserves_diagnostic_bridge_and_failed_outcome(
-        profiles, monkeypatch, setting, diagnostic, caplog):
-    import logging
-    from types import SimpleNamespace
-    from agent.monitoring import gateway_health
+async def test_turn_error_preserves_failed_outcome_and_wire_suppression(
+        profiles, setting, diagnostic, caplog):
     root, _ = profiles
     (root / "config.yaml").write_text(
         "{}" if setting is None else
         f"display: {{suppress_warning_notifications: {str(setting).lower()}}}")
-    emitted = []
-    monkeypatch.setattr(gateway_health.emitter, "get_emitter",
-                        lambda: SimpleNamespace(emit=emitted.append))
-    logger = logging.getLogger("gateway.platforms.base")
-    bridge = gateway_health.GatewayDiagnosticLogHandler(profile="fixture", version="fixture")
-    logger.addHandler(bridge)
     adapter = RecordingAdapter()
     async def handler(event):
         raise RuntimeError("same source failure")
@@ -184,9 +175,6 @@ async def test_turn_error_preserves_diagnostic_bridge_and_failed_outcome(
         await adapter._session_tasks[key]
         assert adapter.completed[-1][1] is ProcessingOutcome.FAILURE
         assert "same source failure" in caplog.text
-        errors = [e for e in emitted if e.name == "gateway.log.error"]
-        assert len(errors) == 1
-        assert errors[0].severity == "error" and errors[0].profile == "fixture"
         if diagnostic and setting is True:
             assert adapter.wire == []
         else:
@@ -194,5 +182,4 @@ async def test_turn_error_preserves_diagnostic_bridge_and_failed_outcome(
             assert ("same source failure" in adapter.wire[0][0]) is (setting is not True)
         assert not adapter._active_sessions
     finally:
-        logger.removeHandler(bridge)
         await adapter.cancel_background_tasks()

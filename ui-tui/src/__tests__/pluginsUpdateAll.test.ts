@@ -34,8 +34,7 @@ describe('/plugins update', () => {
     expect(createSlashHandler(ctx as never)('/plugins update')).toBe(true)
     await vi.waitFor(() => expect(ctx.transcript.page).toHaveBeenCalled())
 
-    const work = request.mock.calls.filter(([method]) => method !== 'shared_metrics.slash_command')
-    expect(work).toEqual([['plugins.manage', { action: 'update_all' }, UPDATE_ALL_TIMEOUT_MS]])
+    expect(request.mock.calls).toEqual([['plugins.manage', { action: 'update_all' }, UPDATE_ALL_TIMEOUT_MS]])
     expect(UPDATE_ALL_TIMEOUT_MS).toBeGreaterThan(45_000)
 
     const text = ctx.transcript.page.mock.calls[0]![0] as string

@@ -23,7 +23,6 @@ import { zhPluginUpdate } from './zh_plugin_update'
 import { zhPluginUpdateAll } from './zh_plugin_update_all'
 import { zhPreviewWeb } from './zh_preview_web'
 import { zhProjects } from './zh_projects'
-import { zhSharedMetrics } from './zh_shared_metrics'
 import { zhThemePicker } from './zh_theme_picker'
 import { zhUpdateChannel } from './zh_update_channel'
 
@@ -40,7 +39,6 @@ export const zhOverrides = {
     copyUrl: '复制链接',
     close: '关闭'
   },
-  sharedMetrics: zhSharedMetrics,
   firstRun: zhFirstRun,
   intro: introZh,
   connectors: zhConnectorCard,

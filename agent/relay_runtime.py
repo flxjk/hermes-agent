@@ -951,7 +951,7 @@ def managed_callback_guard():
 
 
 def _warn_on_error(what: str, callback: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
-    """Run fail-open telemetry work: log ``Hermes Relay <what> failed`` and return None on error."""
+    """Run a fail-open Relay scope operation: log ``Hermes Relay <what> failed`` and return None on error."""
     try:
         return callback(*args, **kwargs)
     except Exception:
@@ -960,7 +960,7 @@ def _warn_on_error(what: str, callback: Callable[..., Any], *args: Any, **kwargs
 
 
 def _fail_open(what: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    """Decorator form of ``_warn_on_error`` for telemetry hooks that must never block the caller."""
+    """Decorator form of ``_warn_on_error`` for Relay hooks that must never block the caller."""
     def wrap(fn: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(fn)
         def guarded(*args: Any, **kwargs: Any) -> Any:

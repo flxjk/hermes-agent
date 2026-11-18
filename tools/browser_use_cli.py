@@ -7,7 +7,6 @@ The harness speaks CDP to whatever ``tools.browser_session`` resolved for the ca
 """
 
 import contextlib
-import contextvars
 import functools
 import importlib
 import importlib.util
@@ -771,20 +770,13 @@ def _take_real_profile_note(route_key: str) -> dict:
     return {"real_profile_unavailable": _real_profile_fallback[route_key]}
 
 
-def _no_code_error(code: str) -> Optional[str]:
-    if not code or not code.strip():
-        return ("No code provided. Pass Python that uses the pre-imported helpers, e.g. new_tab(\"https://example.com\") then print(page_info()).")
-    return None
-
-
 def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT_S,
                  task_id: Optional[str] = None, local: bool = False):
     """Run Python code through the browser-use CLI, and return its output"""
     from agent.redact import redact_sensitive_text
-    from tools.hosted_tool_policy import host_refusal
     from tools.registry import tool_error, tool_result
-    if refusal := host_refusal("browser_exec", "its Python runs on this host") or _no_code_error(code):
-        return tool_error(refusal)  # the hosted refusal comes before any browser setup
+    if not code or not code.strip():
+        return tool_error("No code provided. Pass Python that uses the pre-imported helpers, e.g. new_tab(\"https://example.com\") then print(page_info()).")
 
     # The verdict is carried into the route, never re-derived: the predicate resolves DNS, so a second
     # evaluation could relax the floor and still pick the cloud for a rebinding host.
@@ -817,7 +809,6 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
     _exec_route_is_sidecar[route_key] = local_sidecar
     local_engine = env.pop(_BOT_DESKTOP_BROWSER_SENTINEL, None)
     bot_desktop_browser = bool(local_engine)
-    _exec_local_engine.set(local_engine)  # only local browsers carry the sentinel
 
     # SHARED browser (/browser connect CDP override): pin each named session to its own tab (see
     # _OWN_TAB_PREAMBLE). Private per-name browsers skip this — nothing to collide with.
@@ -904,7 +895,7 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
 
 _HEADER_BASE = (
     "Drive a real browser for JS pages, logins, forms and clicks (Browser Use CLI). `code` runs as full "
-    "Python (stdlib available); print(...) any data you need back. Start `code` with a one-line "
+    "Python (stdlib available) with pre-imported browser helpers; stdout comes back in the result. Start `code` with a one-line "
     "comment describing the step for the user in plain language, max 60 chars "
     "(e.g. `# Searching Amazon for paper towels`) — the UI shows it as the step label.\n\n"
     "STATE: the browser session and workspace persist across calls; Python variables do NOT (fresh "
@@ -913,8 +904,8 @@ _HEADER_BASE = (
     "('all N products / every entry'), append each batch to a JSON/CSV file in the workspace, then read it "
     "back and aggregate in code — dedupe/count/sort with Python, not in your head — and verify the "
     "collected count against what was asked before answering.\n\n"
-    "Batch each sub-procedure (navigate, wait, extract, act) into one call, but for long extractions "
-    "prefer several medium calls that append to workspace files over "
+    "Batch each sub-procedure (navigate, wait, extract, act) into one call — do not spend a call per "
+    "action — but for long extractions prefer several medium calls that append to workspace files over "
     "one giant call, so progress survives timeouts."
 )
 
@@ -1001,10 +992,10 @@ BROWSER_EXEC_SCHEMA = {
     "parameters": {
         "type": "object",
         "properties": {
-            "code": {"type": "string", "description": "Python using the pre-imported browser helpers."},
+            "code": {"type": "string", "description": "Python code to execute using the pre-imported browser helpers. Use print(...) for any data you need back."},
             "session": {"type": "string", "description": "Named isolated browser session — its own daemon and (on cloud backends) own browser, so concurrent tasks don't share tabs. Reuse the same name on every related call; omit for the shared default session."},
             "timeout_s": {"type": "integer", "default": _DEFAULT_TIMEOUT_S,
-                          "description": f"Max seconds to wait for the code to finish (max {_MAX_TIMEOUT_S})."},
+                          "description": f"Max seconds to wait for the code to finish (default {_DEFAULT_TIMEOUT_S}, max {_MAX_TIMEOUT_S})."},
         },
         "required": ["code"],
     },
@@ -1017,26 +1008,13 @@ BROWSER_EXEC_SCHEMA = {
 from tools.registry import registry
 
 
-# The LOCAL browser this context's browser_exec call ran on ("local" Chromium or "lightpanda", from its session),
-# else None: a configured cloud provider did not serve a hybrid ::local sidecar, cloud-fallback or real-profile
-# call, and browser.engine read afterwards may name another engine than the session's, so neither labels it.
-_exec_local_engine: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("browser_exec_local_engine",
-                                                                                   default=None)
-
-
 def _handle_browser_exec(args: dict, **kw):
-    """Registry handler; each call counts against the backend that served it (shared metrics, opt-in)."""
-    from hermes_cli.observability.shared_metrics_loop import record_browser_call
-    from tools.browser_session_cloud import browser_backend_name
-    token = _exec_local_engine.set(None)
-    try:
-        return record_browser_call(lambda: browser_exec(
-            code=args.get("code", ""), session=args.get("session", "") or "",
-            timeout_s=args.get("timeout_s", _DEFAULT_TIMEOUT_S), task_id=kw.get("task_id"),
-            local=bool(args.get("local", False)),
-        ), lambda: browser_backend_name(local_engine=_exec_local_engine.get()))
-    finally:
-        _exec_local_engine.reset(token)
+    """Registry handler."""
+    return browser_exec(
+        code=args.get("code", ""), session=args.get("session", "") or "",
+        timeout_s=args.get("timeout_s", _DEFAULT_TIMEOUT_S), task_id=kw.get("task_id"),
+        local=bool(args.get("local", False)),
+    )
 
 
 registry.register(
@@ -1047,5 +1025,4 @@ registry.register(
     check_fn=browser_exec_available,
     dynamic_schema_overrides=_dynamic_schema_overrides,
     emoji="🌐",
-    compat_args=("local",),  # advertised only when a local browser is on offer
 )

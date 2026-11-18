@@ -13,7 +13,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from pm.filesystem import long_root, native, remove_tree, retry_held
+from pm.filesystem import long_root, native
 from pm.package import (
     DebPackage,
     InstallError,
@@ -265,7 +265,7 @@ class Python(_BionicDebArm, BinaryPackage, DebPackage):
         # recorded over the shipped bytes, so a post-publish deletion (as the
         # old bundle-time drop did) makes doctor's re-hash mismatch.
         if target == "win32-arm64":
-            retry_held(lambda: (staged / "vcruntime140_1.dll").unlink(missing_ok=True))
+            (staged / "vcruntime140_1.dll").unlink(missing_ok=True)
         # python-build-standalone's Windows build ships python.exe only, so `python3` (npm and
         # vitest helpers, POSIX-minded scripts) resolves past the activated PATH to the Microsoft
         # Store's App Execution Alias stub, which installs nothing and fails. python.exe is a
@@ -532,7 +532,7 @@ class Venv(StatePackage):
         """
         import uuid
         from pm.environments import install_state_dir, runtime_facts_path
-        from pm.environment import managed_environment  # noqa: TID251
+        from pm.environment import managed_environment
         from pm.lock import Facts
         from pm.native_build import source_build_environment
         from pm.workspace import build_member_dirs, lock_and_sync
@@ -818,11 +818,11 @@ class Pnpm(BinaryPackage):
         package = staged / "package"
         dist = package / "dist"
         if dist.is_dir():
-            retry_held(lambda: dist.rename(staged / "dist"))
+            dist.rename(staged / "dist")
         else:
             for item in package.iterdir():
-                retry_held(lambda: item.rename(staged / item.name))
-        retry_held(lambda: remove_tree(package))
+                item.rename(staged / item.name)
+        shutil.rmtree(package)
 
     def latest_versions(self, target: str, locked=None) -> list[str]:
         latest = npm_dist_tags("pnpm").get("latest")
@@ -1257,7 +1257,7 @@ def _unpack_vc_runtime(name: str, archive: Path, staged: Path, target: str) -> N
             dll = staged / match[1].lower()
             dll.write_bytes(zf.read(info))
             if machine_matches_binary(dll, target) is False:
-                retry_held(dll.unlink)
+                dll.unlink()
     if not (staged / "msvcp140.dll").is_file():
         raise InstallError(name, f"{archive.name} carries no {target} msvcp140.dll")
 

@@ -297,7 +297,6 @@ from hermes_cli.subcommands.acp import build_acp_parser
 from hermes_cli.subcommands.tools import build_tools_parser
 from hermes_cli.subcommands.insights import build_insights_parser
 from hermes_cli.subcommands.usage import build_usage_parser
-from hermes_cli.subcommands.monitoring import build_monitoring_parser
 from hermes_cli.subcommands.skills import build_skills_parser
 from hermes_cli.subcommands.pairing import build_pairing_parser
 from hermes_cli.subcommands.plugins import build_plugins_parser
@@ -715,7 +714,6 @@ from hermes_cli.main_agent_cmds import (
     cmd_acp,
     cmd_insights,
     cmd_memory,
-    cmd_monitoring,
     cmd_skills,
     cmd_tools,
 )
@@ -1640,12 +1638,6 @@ def cmd_chat(args):
         os.environ["HERMES_SESSION_SOURCE_EXPLICIT"] = "1"
 
     _pin_kanban_board_env()
-    from hermes_cli.observability.shared_metrics_consent import offer_consent_before_chat
-
-    # Not before setup: a blank install meets "Setup Required" first. The offer stays
-    # undecided, so it is asked on the first launch with a provider.
-    if provider_configured:
-        offer_consent_before_chat(args)
     _confirm_startup_expensive_model_override(args)
 
     passthrough = {k: getattr(args, k, d) for k, d in _CHAT_PASSTHROUGH}
@@ -1680,9 +1672,7 @@ def cmd_chat(args):
 
     try:
         from cli import main as cli_main
-        from hermes_cli.observability.shared_metrics_process import begin_process
 
-        begin_process("cli")
         cli_main(**kwargs)
     except ValueError as e:
         print(f"Error: {e}")
@@ -1773,13 +1763,11 @@ def cmd_model(args):
             print("  Cleared model picker cache.")
         except Exception:
             pass
-    from hermes_cli.observability.shared_metrics_setup import provider_setup_surface
     from hermes_cli.setup import run_setup_action_with_navigation
 
-    with provider_setup_surface("cli_model"):
-        run_setup_action_with_navigation(
-            "Model & Provider", lambda: select_provider_and_model(args=args), cancelled_message="No change.",
-        )
+    run_setup_action_with_navigation(
+        "Model & Provider", lambda: select_provider_and_model(args=args), cancelled_message="No change.",
+    )
 
 
 # Provider id -> flow(config, current_model, args). Lambdas resolve the
@@ -1948,34 +1936,32 @@ def select_provider_and_model(args=None):
     # _model_flow_* names at call time so test monkeypatches on
     # hermes_cli.main keep intercepting.
     saves_before = _model_choice_save_count()
-    from hermes_cli.observability.shared_metrics_setup import cli_provider_setup
-    with cli_provider_setup(selected_provider):
-        # Bespoke core flow, else the profile's own (``model_setup_flow``), else the generic one.
-        flow = _PROVIDER_MODEL_FLOWS.get(selected_provider) or _profile_model_setup_flow(selected_provider)
-        if flow is None and _is_profile_plugin_flow_provider(selected_provider):
-            # Registered plugin profile with no bespoke flow: the generic one, keyed by its auth_type.
-            flow = lambda c, m, a: _model_flow_plugin_provider(c, selected_provider, m)
-        if flow is not None:
-            flow(config, current_model, args)
-        elif (
-            selected_provider.startswith("custom:")
-            or selected_provider in _custom_provider_map
-        ):
-            provider_info = _named_custom_provider_map(load_config()).get(selected_provider)
-            if provider_info is None:
-                print(
-                    "Warning: the selected saved custom provider is no longer available. "
-                    "It may have been removed from config.yaml. No change."
-                )
-                return
-            _model_flow_named_custom(config, provider_info)
-        elif selected_provider == "remove-custom":
-            _remove_custom_provider(config)
-        elif (
-            selected_provider in _GENERIC_API_KEY_PROVIDERS
-            or _is_profile_api_key_provider(selected_provider)
-        ):
-            _model_flow_api_key_provider(config, selected_provider, current_model)
+    # Bespoke core flow, else the profile's own (``model_setup_flow``), else the generic one.
+    flow = _PROVIDER_MODEL_FLOWS.get(selected_provider) or _profile_model_setup_flow(selected_provider)
+    if flow is None and _is_profile_plugin_flow_provider(selected_provider):
+        # Registered plugin profile with no bespoke flow: the generic one, keyed by its auth_type.
+        flow = lambda c, m, a: _model_flow_plugin_provider(c, selected_provider, m)
+    if flow is not None:
+        flow(config, current_model, args)
+    elif (
+        selected_provider.startswith("custom:")
+        or selected_provider in _custom_provider_map
+    ):
+        provider_info = _named_custom_provider_map(load_config()).get(selected_provider)
+        if provider_info is None:
+            print(
+                "Warning: the selected saved custom provider is no longer available. "
+                "It may have been removed from config.yaml. No change."
+            )
+            return
+        _model_flow_named_custom(config, provider_info)
+    elif selected_provider == "remove-custom":
+        _remove_custom_provider(config)
+    elif (
+        selected_provider in _GENERIC_API_KEY_PROVIDERS
+        or _is_profile_api_key_provider(selected_provider)
+    ):
+        _model_flow_api_key_provider(config, selected_provider, current_model)
 
     _offer_reasoning_after_pick(current_model, saves_before)
 
@@ -2192,14 +2178,11 @@ def _update_preflight_handled(args) -> bool:
     """Managed-install refusal, --plan, admission gate, --check. True = nothing more to do."""
     from hermes_cli.config import is_managed, managed_error
     from hermes_cli.update_channel import handle_metadata_args
-    from hermes_cli.update_cmd_common import _record_stop
 
     if handle_metadata_args(args, PROJECT_ROOT):
         sys.exit(0)
     if is_managed():
         managed_error("update Hermes Agent")
-        if not any(getattr(args, flag, False) for flag in ("plan", "check", "list_venv_holders")):
-            _record_stop("managed_install", without_receipt="refused")  # an update attempt: a metrics row only
         return True
 
     # --plan is read-only and deployment-kind aware, so it runs BEFORE the
@@ -2289,8 +2272,6 @@ def cmd_update(args):
     if not _update_lock.acquire():
         print(describe_holder(_update_lock.holder))
         _finalize_update_output(_update_io_state)
-        from hermes_cli.update_cmd_common import _record_stop
-        _record_stop("lock_held", without_receipt="refused")  # no receipt: latest.json is the holder's
         sys.exit(UPDATE_EXIT_CONCURRENT)
 
     from hermes_cli.update_cmd import _cmd_update_impl
@@ -2579,9 +2560,6 @@ def cmd_dashboard(args):
     # (Docker/s6, CI, --no-open pipelines) fall through to start_server's
     # fail-closed SystemExit unchanged.
     _maybe_setup_dashboard_auth_interactively(args)
-    if _headless_backend:
-        from hermes_cli.observability.shared_metrics_process import begin_process
-        begin_process("serve")
 
     # The in-browser Chat tab (embedded TUI over PTY/WebSocket) is always
     # available — desktop and dashboard both rely on `/api/ws` + `/api/pty`.
@@ -2652,7 +2630,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
         "dump", "egress", "fallback", "gateway", "hooks", "import", "insights",
         "gui", "desktop", "kanban", "login", "logout", "logs", "lsp", "mcp", "memory", "migrate", "moa",
         "journey", "memory-graph", "learning",
-        "model", "monitoring", "pairing", "pause", "peer", "pets", "plugins", "portal", "profile",
+        "model", "pairing", "pause", "peer", "pets", "plugins", "portal", "profile",
         "project", "proxy", "prompt-size", "resume", "send", "sessions", "setup",
         "skin", "skills", "slack", "status", "tools", "uninstall", "update",
         "usage", "vault",
@@ -3267,7 +3245,6 @@ def _build_cli_parser():
     build_sessions_parser(subparsers, cmd_sessions=cmd_sessions_lazy)
     build_insights_parser(subparsers, cmd_insights=cmd_insights)
     build_usage_parser(subparsers)
-    build_monitoring_parser(subparsers, cmd_monitoring=cmd_monitoring)
     build_vault_parser(subparsers)
     build_update_parser(subparsers, cmd_update=cmd_update)
     build_uninstall_parser(subparsers, cmd_uninstall=cmd_uninstall)
@@ -3431,8 +3408,6 @@ def main():
     if getattr(args, "oneshot", None):
         _run_oneshot_from_args(args)
 
-    from hermes_cli.observability.shared_metrics_disabled import set_process_surface
-    set_process_surface(args.command)
     # No subcommand (optionally with top-level --resume / --continue) → chat.
     if args.command is None:
         _default_to_chat(args)

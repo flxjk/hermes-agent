@@ -719,99 +719,6 @@ export interface FreeTierClaimNudgeParams {
 export interface FreeTierClaimNudgeResult {
   claimed: boolean
 }
-/** The focused profile's ``telemetry.shared_metrics`` opt-ins. ``send`` is never true while ``enabled`` is false; ``decided`` = either key is written in config.yaml (the shipped defaults are not an answer) and it is not a ``reask``: an "off" from before the type-ahead fix, offered once more with the reason. */
-export interface SharedMetricsConsentResult {
-  enabled: boolean
-  send: boolean
-  decided: boolean
-  reask?: boolean
-}
-/** ``send`` is ignored unless ``enabled``; ``first_run`` marks the Desktop first-run answer. */
-export interface SharedMetricsSetParams {
-  profile?: string | null
-  enabled: boolean
-  send?: boolean
-  first_run?: boolean
-}
-/** ``command`` is the raw typed name (no leading ``/``, no args); the backend canonicalizes it against the published registry. ``session_id`` scopes the count to that session's profile. */
-export interface SharedMetricsSlashCommandParams {
-  profile?: string | null
-  command: string
-  session_id?: string | null
-}
-export interface SharedMetricsSlashCommandResult {
-  ok: boolean
-}
-/** ``elapsed_ms`` = the client's own launch (TUI process start / Desktop app start) to ready (TUI gateway ready / Desktop backend attached), measured once per launch by the client. The client names its surface because a Desktop may attach to a URL/cloud backend where ``HERMES_DESKTOP`` is unset; without it the backend falls back to its own client detection. ``launch_id`` is an opaque per-launch token the backend latches on (never recorded), so a reconnect re-sending the same launch counts once while a new launch counts again. */
-export interface SharedMetricsStartupLatencyParams {
-  profile?: string | null
-  elapsed_ms: number
-  surface?: 'desktop_attach' | 'tui' | null
-  launch_id?: string | null
-}
-export interface SharedMetricsStartupLatencyResult {
-  ok: boolean
-}
-/** One Desktop PACKAGED self-update (electron-updater / App Installer / Store). Source-checkout hand-offs run ``hermes update`` and are counted from its receipt, never here. Raw words; the backend buckets them: ``outcome`` success|failed|noop|refused, ``failed_stage`` download|verify|apply|restart, ``mechanism`` the updater strategy kind, ``duration_ms`` wall time, ``from_commit_date`` the updated-from build's commit time (epoch seconds) when known. */
-export interface SharedMetricsUpdateRunParams {
-  profile?: string | null
-  outcome: string
-  failed_stage?: string | null
-  mechanism?: string | null
-  duration_ms?: number | null
-  from_commit_date?: number | null
-}
-export interface SharedMetricsUpdateRunResult {
-  ok: boolean
-}
-/** ``area`` is a Desktop surface id (``command_palette``, ``terminal_pane``, ``settings_<view>`` …); the backend collapses anything outside its closed set to ``other``. */
-export interface SharedMetricsDesktopFeatureUseParams {
-  profile?: string | null
-  area: string
-}
-export interface OkResult {
-  ok?: boolean
-}
-/** ``kind`` notice_dismissed|error_toast|renderer_crash|backend_disconnect|slow_frame; ``detail`` a closed code-defined word for that kind (notice id, error category, crash reason, drop reason, frame duration bucket), never message text. */
-export interface SharedMetricsDesktopFrictionParams {
-  profile?: string | null
-  kind: string
-  detail: string
-}
-/** ``step`` a Desktop first-run step id; ``event`` reached|completed|abandoned. */
-export interface SharedMetricsDesktopOnboardingParams {
-  profile?: string | null
-  step: string
-  event: string
-}
-/** ``signal`` quick_close|cancelled|setting_off_default|rage_click|undo|feature_disabled; ``target`` a closed code-defined id for that signal (area, flow, action, undo path, feature toggle); ``setting`` a config key for setting_off_default only (the value is never sent — the backend compares it to the default). */
-export interface SharedMetricsDesktopDislikeParams {
-  profile?: string | null
-  signal: string
-  target?: string
-  setting?: string | null
-}
-/** One finished UTC day of Desktop use, aggregated on the client. ``day`` (YYYY-MM-DD) only latches a resend and is never recorded; the raw counts are bucketed by the backend. */
-export interface SharedMetricsDesktopDailyParams {
-  profile?: string | null
-  day: string
-  bot_count?: number
-  modes?: SharedMetricsDesktopModeDay[]
-  actions?: SharedMetricsDesktopActionDay[]
-}
-export interface SharedMetricsDesktopModeDay {
-  mode: 'bots' | 'sessions'
-  active_ms?: number
-  messages_sent?: number
-}
-export interface SharedMetricsDesktopActionDay {
-  action: string
-  via: 'click' | 'menu' | 'palette' | 'shortcut'
-  count: number
-}
-export interface SharedMetricsDesktopDailyResult {
-  recorded: boolean
-}
 export interface ModelOptionsParams {
   profile?: string | null
   session_id?: string | null
@@ -1655,12 +1562,10 @@ export interface GroupsStateParams {
   room_id: string
   include_disbanded?: boolean | null
 }
-/** ``change_events``: this backend broadcasts ``groups.changed`` when the room moves, so a client's poll is only a backstop (absent on older backends: keep polling at the old rate). */
 export interface GroupsStateResult {
   room: Room
   driver_status?: RoomDriverStatus | null
   context?: RoomContext | null
-  change_events?: boolean | null
 }
 /** ``HostedRoomService.status(room_id)``; ``pending_actions`` rows are the exact attempt (``hosted_room_service.attempt_action``: ``kind`` + ``member_id``/``task_id``/``execution_generation``) or the driver's approval action (``kind: approval`` + run/session/approval context), or a stalled room preparation's Retry (``task_id`` ``prepare:<room_id>``, ``member_id`` the members not woken). ``member_activity`` lists live tasks in admission order (absent from older gateways). ``last_error`` is this room's last preparation failure, null once one succeeds. */
 export interface RoomDriverStatus {
@@ -1970,6 +1875,9 @@ export interface BotRelayReplyParams {
   error?: string | null
   reason?: string | null
 }
+export interface OkResult {
+  ok?: boolean
+}
 export interface I18nLanguagesResult {
   languages: LanguageOption[]
 }
@@ -2141,7 +2049,7 @@ export interface ProfileCanonicalSession {
   message_count?: number
   live_message_count?: number | null
 }
-/** ``clone_from`` omitted = fresh profile + bundled skills (with ``clone_all``: a full copy of the active profile, no bundled skills); ``mirror_credentials`` and ``share_auth`` default on (the bot page's defaults) so a headless bot has a provider. */
+/** ``clone_from`` omitted = fresh profile + bundled skills; ``mirror_credentials`` and ``share_auth`` default on (the bot page's defaults) so a headless bot has a provider. */
 export interface ProfilesCreateParams {
   profile?: string | null
   name: string
@@ -6270,12 +6178,6 @@ export interface PetHatchProgressPayload {
 }
 /** ``change_watcher._CHANGE_WATCHES`` payload fn — ``{}`` for every watch except pet.changed. */
 export type ChangeSignalPayload = Record<string, unknown>
-/** ``change_watcher._groups_changed_payload``: the rooms whose log, tasks or live status moved; absent when something process-wide moved (every open room re-reads). ``broadcast_id`` names one broadcast: the same frame reaches a window once per open socket, and a copy needs no second read. */
-export interface GroupsChangedPayload {
-  room_ids?: string[] | null
-  broadcast_id?: string | null
-  [key: string]: unknown
-}
 export type ConnectorErrorReason = 'INVALID_PARAMS' | 'NOT_OWNER' | 'UNSUPPORTED_RUNTIME' | 'CONNECTOR_REQUEST_FAILED' | 'INVALID_CONNECTOR_RESPONSE' | 'UNKNOWN_TARGET' | 'LINK_STILL_VALID' | 'REISSUE_REFUSED' | 'UNKNOWN_OPERATION' | 'INVALID_ANSWER' | 'NEEDS_NOUS_AUTH' | 'CONNECTOR_NOT_FOUND' | 'TOOLS_UNAVAILABLE' | 'CONNECTORS_UNAVAILABLE' | 'CATALOG_UNAVAILABLE' | 'ACCOUNTS_UNAVAILABLE' | 'CONNECTION_NOT_FOUND' | 'POLICY_UNAVAILABLE' | 'POLICY_CONFLICT' | 'FORBIDDEN_SCOPE' | 'ORG_REQUIRED' | 'ORG_ACCESS_DENIED' | 'INVALID_POLICY' | 'ALIAS_TAKEN'
 
 // ── Client→server methods ──
@@ -6700,26 +6602,6 @@ export interface RpcMethods {
   'setup.runtime_check': { params: SetupRuntimeCheckParams; result: SetupRuntimeCheckResult }
   /** Loose provider check: is ANY provider auth state discoverable for the (launch or named) profile. */
   'setup.status': { params: ProfileParams; result: SetupStatusResult }
-  /** Record one finished Desktop day (mode use + button presses); recorded=false keeps it for a retry. */
-  'shared_metrics.desktop_daily': { params: SharedMetricsDesktopDailyParams; result: SharedMetricsDesktopDailyResult }
-  /** Count one Desktop dislike signal (fire-and-forget; capped per signal per day; a no-op unless on). */
-  'shared_metrics.desktop_dislike': { params: SharedMetricsDesktopDislikeParams; result: OkResult }
-  /** Count one Desktop area used today (fire-and-forget; once per area per UTC day; a no-op unless on). */
-  'shared_metrics.desktop_feature_use': { params: SharedMetricsDesktopFeatureUseParams; result: OkResult }
-  /** Count one Desktop friction event (fire-and-forget; capped per day; a no-op unless on). */
-  'shared_metrics.desktop_friction': { params: SharedMetricsDesktopFrictionParams; result: OkResult }
-  /** Count one Desktop first-run step transition (fire-and-forget; once per step+event; a no-op unless on). */
-  'shared_metrics.desktop_onboarding': { params: SharedMetricsDesktopOnboardingParams; result: OkResult }
-  /** Write both shared-metrics opt-ins at once (send requires collection) and reconcile consent windows. */
-  'shared_metrics.set': { params: SharedMetricsSetParams; result: SharedMetricsConsentResult }
-  /** Count one user-typed slash command (fire-and-forget; a no-op unless shared metrics are on). */
-  'shared_metrics.slash_command': { params: SharedMetricsSlashCommandParams; result: SharedMetricsSlashCommandResult }
-  /** Record one client launch-to-ready latency (fire-and-forget; a no-op unless shared metrics are on). */
-  'shared_metrics.startup_latency': { params: SharedMetricsStartupLatencyParams; result: SharedMetricsStartupLatencyResult }
-  /** Pure read of the focused profile's shared-metrics opt-ins (collection, upload, answered). */
-  'shared_metrics.status': { params: ProfileParams; result: SharedMetricsConsentResult }
-  /** Count one Desktop packaged self-update outcome (fire-and-forget; a no-op unless shared metrics are on). */
-  'shared_metrics.update_run': { params: SharedMetricsUpdateRunParams; result: SharedMetricsUpdateRunResult }
   /** Run a safe (non-dangerous) shell command captured for ``!cmd`` / inline substitution. */
   'shell.exec': { params: ShellExecParams; result: ShellExecResult }
   /** Skills hub backend: list the profile's skills or search / browse / inspect / install from the hub. */
@@ -7017,16 +6899,6 @@ export const RPC_METHODS = [
   'session.workspace.move',
   'setup.runtime_check',
   'setup.status',
-  'shared_metrics.desktop_daily',
-  'shared_metrics.desktop_dislike',
-  'shared_metrics.desktop_feature_use',
-  'shared_metrics.desktop_friction',
-  'shared_metrics.desktop_onboarding',
-  'shared_metrics.set',
-  'shared_metrics.slash_command',
-  'shared_metrics.startup_latency',
-  'shared_metrics.status',
-  'shared_metrics.update_run',
   'shell.exec',
   'skills.manage',
   'skills.reload',
@@ -7318,8 +7190,6 @@ export interface BackendGatewayEventMap {
   'free_tier.challenge': FreeTierChallengePayload
   /** First frame of a connection: the resolved skin, the change-event capability and the replay epoch. */
   'gateway.ready': GatewayReadyPayload
-  /** A Group Chat log, task or live status moved; an open room re-reads its log delta and groups.state. */
-  'groups.changed': GroupsChangedPayload
   /** The turn ended: final text, usage and outcome. */
   'message.complete': MessageCompletePayload
   /** One streamed chunk of the assistant reply (null text: segment boundary). */
@@ -7461,7 +7331,6 @@ export const GATEWAY_EVENT_TYPES = [
   'error',
   'free_tier.challenge',
   'gateway.ready',
-  'groups.changed',
   'message.complete',
   'message.delta',
   'message.interim',

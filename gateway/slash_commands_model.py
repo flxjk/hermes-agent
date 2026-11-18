@@ -81,9 +81,6 @@ class _ModelSwitchContext:
     restore_snapshot: Optional[dict] = None
     current_model: str = ""
     current_provider: str = "openrouter"
-    # The provider actually configured/overridden (None = unset): ``current_provider`` defaults to
-    # openrouter for switch_model, which must not label the configured model in metrics.
-    route_provider: Optional[str] = None
     current_base_url: str = ""
     current_api_key: str = ""
     user_provs: Any = None
@@ -101,7 +98,6 @@ class _ModelSwitchContext:
             if isinstance(model_cfg, dict):
                 self.current_model = model_cfg.get("default", "")
                 self.current_provider = model_cfg.get("provider", self.current_provider)
-                self.route_provider = model_cfg.get("provider")
                 self.current_base_url = model_cfg.get("base_url", "")
             self.user_provs = cfg.get("providers")
             try:
@@ -120,7 +116,6 @@ class _ModelSwitchContext:
         if override:
             self.current_model = override.get("model", self.current_model)
             self.current_provider = override.get("provider", self.current_provider)
-            self.route_provider = override.get("provider", self.route_provider)
             self.current_base_url = override.get("base_url", self.current_base_url)
             self.current_api_key = override.get("api_key", self.current_api_key)
 
@@ -397,28 +392,6 @@ class GatewayModelCommandsMixin:
             lock = self.__dict__["_model_switch_lock_obj"] = asyncio.Lock()
         return lock
 
-    def _record_switch_metrics(self, result, ctx: _ModelSwitchContext, source) -> None:
-        """Slash dispatch does not install the routed profile's scope, so a multiplexed runner binds
-        the owning home for the switch row and its switch_away friction."""
-        from hermes_cli.observability.shared_metrics_events import record_model_switch
-        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
-
-        home = None
-        if getattr(getattr(self, "config", None), "multiplex_profiles", False):
-            with contextlib.suppress(Exception):
-                home = self._resolve_profile_home_for_source(source)
-        session_id = None
-        with contextlib.suppress(Exception):
-            session_id = getattr(self._cached_agent_for(ctx.session_key), "session_id", None)
-        token = set_hermes_home_override(str(home)) if home else None
-        try:
-            record_model_switch(
-                from_provider=ctx.route_provider, to_provider=result.target_provider, surface="gateway",
-                from_model=ctx.current_model, session_id=session_id)
-        finally:
-            if token is not None:
-                reset_hermes_home_override(token)
-
     async def _commit_model_switch_locked(self, result, ctx: _ModelSwitchContext, *, source, picker: bool) -> str:
         one_turn = False if picker else ctx.one_turn
         from gateway.session_setting_commands import defer_local_model_pick, local_authority_live
@@ -433,7 +406,6 @@ class GatewayModelCommandsMixin:
             effort = (ctx.reasoning_effort or "").strip().lower()
             level = effort if parse_reasoning_effort(effort) is not None else ""
             await asyncio.to_thread(defer_local_model_pick, authority, live, result, level)
-            self._record_switch_metrics(result, ctx, source)
             global_error = None
             if ctx.persist_global:
                 try:
@@ -445,7 +417,6 @@ class GatewayModelCommandsMixin:
             error = self._switch_cached_agent_model(result, ctx, picker)
             if error is not None:
                 return error
-            self._record_switch_metrics(result, ctx, source)
             global_error = await self._record_model_switch(
                 result, ctx, source=source, one_turn=one_turn, picker=picker)
         reply = await self._model_switch_confirmation(
@@ -478,8 +449,6 @@ class GatewayModelCommandsMixin:
             providers = []
         if not providers:
             return False
-        from gateway.approval_actor import opener_authority
-        on_model_selected.prompt_authority = opener_authority(event)  # only its opener (or an admin) taps it
         result = await adapter.send_model_picker(
             chat_id=source.chat_id, providers=providers,
             current_model=listing_kwargs["current_model"],
@@ -624,12 +593,6 @@ class GatewayModelCommandsMixin:
         ctx.read_config()
         if request.is_reset:
             return await self._handle_model_reset(event, ctx)
-        # Turn precedence: session /model > channel_overrides > config.yaml.
-        # The channel's full route as the turn resolves it, so a config-backed endpoint (custom) survives.
-        from gateway.session_info_route import channel_override_route
-        _ch_model, _ch_route, _ch_forced = await asyncio.to_thread(channel_override_route, getattr(self, "config", None), source)
-        if _ch_model:
-            ctx.apply_override({"model": _ch_model, **(_ch_route or ({"provider": _ch_forced} if _ch_forced else {}))})
         ctx.apply_override(self._session_model_overrides.get(session_key, {}))
         if not request.target and not request.explicit_provider:
             return await self._model_listing_reply(event, ctx, profile_home)
@@ -947,8 +910,6 @@ class GatewayModelCommandsMixin:
         adapter = self._delivery_adapter_for(event.source)
         if adapter is None or getattr(type(adapter), "send_choice_picker", None) is None:
             return False
-        from gateway.approval_actor import opener_authority
-        on_choice_selected.prompt_authority = opener_authority(event)  # only its opener (or an admin) taps it
         try:
             result = await adapter.send_choice_picker(
                 chat_id=event.source.chat_id, title=title, choices=choices, session_key=session_key,

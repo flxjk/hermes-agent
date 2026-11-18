@@ -32,8 +32,8 @@ def _scan_memory_content(content: str) -> Optional[str]:
     return _first_threat_message(content, scope="strict")
 
 
-# Why the last refusal/failure in this context happened, for the shared metric only (a closed name from
-# shared_metrics_contract.MEMORY_OP_FAILURE_CLASSES); never part of the result the model sees.
+# Why the last refusal/failure in this context happened, read by ``_mutate`` to tell an
+# oversize obstacle from a budget refusal; never part of the result the model sees.
 FAILURE_CLASS: ContextVar[str] = ContextVar("memory_failure_class", default="other")
 _BACKUP_FAILED = " (BACKUP FAILED — file unchanged on disk)"
 

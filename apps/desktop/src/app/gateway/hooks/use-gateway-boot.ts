@@ -11,7 +11,6 @@ import { useEffect, useRef } from 'react'
 
 import { canonicalOwnerProfile } from '@/api/canonical-protocol'
 import { createGatewayEventDedupe } from '@/app/gateway/gateway-event-dedupe'
-import { reportStartupLatency } from '@/app/gateway/report-startup-latency'
 import { shouldApplyPostBootProgressError } from '@/components/boot-failure-reauth'
 import type { DesktopBootProgress, HermesConnection, HermesWindowState } from '@/global'
 import { HermesGateway } from '@/hermes'
@@ -37,7 +36,6 @@ import {
 } from '@/store/boot'
 import { resetBackgroundPollingGuard } from '@/store/composer-status'
 import { primaryWireSource, recordConnectionWire } from '@/store/connection-wire'
-import { noteBackendDrop, noteBackendExited } from '@/store/desktop-metrics'
 import {
   $gateway,
   activeGateway,
@@ -383,8 +381,8 @@ export function useGatewayBoot({
     // reconnectAttempt, reconnectFailingSince and escalated reset only once an
     // open proves stable (isStableOpen), judged when the socket closes.
     let openedAt: number | null = null
-    // Why the next post-open close happens, when this hook closes the socket itself
-    // (friction telemetry): a liveness timeout is a real drop, a manual reconnect is not.
+    // Why the next post-open close happens, when this hook closes the socket itself:
+    // a liveness timeout is a real drop, a manual reconnect is not.
     let ownCloseReason: 'manual' | 'timeout' | null = null
     // Consecutive unanswered liveness probes (#95327): a busy-but-healthy
     // backend can fail one probe; only a STREAK proves a genuinely dead
@@ -1193,11 +1191,6 @@ export function useGatewayBoot({
           resetReconnectBackoff()
         }
 
-        // The connected→disconnected edge after a healthy boot, not a switch or our own manual close.
-        if (openedAt !== null && bootCompleted && !$gatewaySwitching.get() && ownCloseReason !== 'manual') {
-          noteBackendDrop(ownCloseReason === 'timeout' ? 'timeout' : null)
-        }
-
         ownCloseReason = null
         openedAt = null
 
@@ -1488,7 +1481,6 @@ export function useGatewayBoot({
         return
       }
 
-      noteBackendExited()
 
       // While the boot overlay is up it already shows the failure with its own
       // Retry, and the reconnect handler below is a no-op before boot completes
@@ -1644,8 +1636,6 @@ export function useGatewayBoot({
         if (cancelled) {
           return
         }
-
-        void reportStartupLatency(desktop, (method, params) => gateway.request(method, params))
 
         // Profile adoption must land first: refreshSessions scopes its fetch by
         // $profileScope ← $activeGatewayProfile. The remaining three fetches

@@ -401,19 +401,15 @@ def _auth_gate_status() -> dict[str, Any]:
     always available in gated mode; "native_pkce" when at least one interactive session
     provider is registered (token-only credentials such as drain, and provisioned-credential
     session providers such as session-token, don't count). Missing
-    "native_pkce" ⇒ older gateway ⇒ desktop falls back automatically. ``peer_access`` is the
-    peer-pass contract this agent takes on ``/api/peer`` (0: none), which the pass issuer reads."""
+    "native_pkce" ⇒ older gateway ⇒ desktop falls back automatically."""
     auth_required = bool(getattr(app.state, "auth_required", False))
     auth_providers: list[str] = []
     auth_flows: list[str] = []
-    peer_access = 0
     try:
         from hermes_cli.dashboard_auth import (
             list_interactive_providers as _list_interactive_providers,
             list_providers as _list_providers)
-        from hermes_cli.dashboard_auth.peer_pass import peer_access_contract
         auth_providers = [p.name for p in _list_providers()]
-        peer_access = peer_access_contract()
         if auth_required:
             auth_flows.append("cookie")
             if _list_interactive_providers():
@@ -422,7 +418,7 @@ def _auth_gate_status() -> dict[str, Any]:
         # Module not importable yet (early startup) — leave as [].
         pass
     return {"auth_required": auth_required, "auth_providers": auth_providers,
-            "auth_flows": auth_flows, "peer_access": peer_access}
+            "auth_flows": auth_flows}
 
 
 def _nous_session_validity() -> str:

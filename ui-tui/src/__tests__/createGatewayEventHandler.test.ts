@@ -1012,8 +1012,8 @@ describe('createGatewayEventHandler', () => {
     } as any)
     onEvent({ payload: { text: 'done' }, type: 'message.complete' } as any)
 
-    // Tool row is now placed before the diff, so telemetry does not render
-    // below the patch that came from that tool.
+    // Tool row is now placed before the diff, so it does not render below the
+    // patch that came from that tool.
     expect(appended).toHaveLength(2)
     expect(appended[0]?.kind).toBe('diff')
     expect(appended[0]?.text).toContain('```diff')

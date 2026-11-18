@@ -28,7 +28,6 @@ import { enPluginUpdate } from './en_plugin_update'
 import { enPluginUpdateAll } from './en_plugin_update_all'
 import { enPreviewWeb } from './en_preview_web'
 import { enProjects } from './en_projects'
-import { enSharedMetrics } from './en_shared_metrics'
 import { enThemePicker } from './en_theme_picker'
 import { enUninstallSection } from './en_uninstall_section'
 import { enUpdateChannel } from './en_update_channel'
@@ -36,7 +35,6 @@ import type { Translations } from './types'
 
 export const en: Translations = {
   externalOpenFailed: enExternalOpenFailed,
-  sharedMetrics: enSharedMetrics,
   appTour: enAppTour,
   firstRun: enFirstRun,
   // English editorial copy stays in the shipped JSONL; other locales override it.

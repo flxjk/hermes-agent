@@ -246,12 +246,6 @@ class RelayAdapter(RelayDiscordInteractionMixin, BasePlatformAdapter):
         """The chat's underlying platform as seen inbound, else the primary's."""
         return self._platform_by_chat.get(str(chat_id)) or self.descriptor.platform
 
-    def _metrics_platform(self, chat_id: str) -> Optional[str]:
-        """The platform a chat's shared metrics carry: the inbound's, else the primary's only when this
-        socket fronts one platform (a multi-platform connector's unknown chat stays unlabelled)."""
-        fronted = {p for p, _ in (getattr(self._transport, "_identities", None) or ())}
-        return self._platform_by_chat.get(str(chat_id)) or (self.descriptor.platform if len(fronted) <= 1 else None)
-
     def warning_notifications_enabled(self, logical_platform=None, *, chat_id=None, metadata=None) -> bool:
         platform = (logical_platform or (metadata or {}).get("_relay_logical_platform")
                     or self._chat_platform(chat_id))
@@ -2000,12 +1994,12 @@ class RelayAdapter(RelayDiscordInteractionMixin, BasePlatformAdapter):
         from gateway.relay.prompt_resolvers import prompt_refusal
         actor = None
         if pending.get("kind") in ("exec_approval", "slash_confirm", "clarify"):
-            from gateway.approval_actor import runner_answer_policy
+            from gateway.approval_actor import runner_admin_ids
             # Identity first: this answer is consumed before handle_message, and without the transport
             # identity the admin lookup read the routed runtime profile instead of the bot-owning one.
             self._canonicalize(event.source)
-            actor = {"actor_id": getattr(event.source, "user_id", ""), "admin_ids": runner_answer_policy(event.source)}
-        if actor and (refusal := prompt_refusal(pending, actor, option_id)):
+            actor = {"actor_id": getattr(event.source, "user_id", ""), "admin_ids": runner_admin_ids(event.source)}
+        if actor and (refusal := prompt_refusal(pending, actor)):
             # Left pending: only the requester (or an approver) can consume it.
             self._send_lifecycle_ack(str(pending.get("chat_id") or getattr(event.source, "chat_id", "")),
                                      refusal, self._prompt_reply_metadata(event))

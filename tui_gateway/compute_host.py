@@ -50,7 +50,7 @@ class _HostTransport:
 
 # Slice of ``ComputeHost.shutdown``'s budget held back for the post-drain finalize: the
 # supervisor SIGKILLs the host 10s (= default ``wait``) after SIGTERM, so a drain that ate
-# the whole budget would leave the flush racing that kill and persist nothing.
+# the whole budget would leave the finalize racing that kill and persist nothing.
 _FLUSH_RESERVE_SECS = 1.0
 
 # Fallback control.error text when a routed server method returns an error without a message.
@@ -108,16 +108,13 @@ class ComputeHost:
         with contextlib.suppress(Exception):
             from tools.environments.base import kill_live_foreground_processes
             kill_live_foreground_processes()
-        # ...and the opt-in shared-metrics rows that atexit hook would have written (bounded).
-        from hermes_cli.observability.shared_metrics_process import flush_before_hard_exit
-        flush_before_hard_exit()
 
     def shutdown(self, *, reason: str = "shutdown", wait: float = 10.0) -> None:
         """Drain in-flight turns, then finalize every session.
 
         ``_finalize_session`` is a one-shot latch, so finalizing before the drain would spend
         it mid-turn and release the lease. ``_FLUSH_RESERVE_SECS`` (at most half of ``wait``)
-        is withheld from the drain so the flush still runs when turns outlast the window.
+        is withheld from the drain so the finalize still runs when turns outlast the window.
         Sessions still running at the deadline are skipped (unfinalized keeps them
         recoverable; atexit ``server._shutdown_sessions`` may re-finalize them).
         """

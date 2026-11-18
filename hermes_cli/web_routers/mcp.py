@@ -18,7 +18,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from hermes_cli.web_deps import late
-from hermes_cli.web_server_mcp import _mcp_oauth_flows, _mcp_server_summary, normalize_mcp_server_create
+from hermes_cli.web_server_mcp import _mcp_oauth_flows, _mcp_server_summary, _normalize_mcp_server_create
 from hermes_cli.web_models import MCPCatalogInstall, MCPEnabledToggle, MCPServerCreate, MCPServersReplace
 from hermes_cli.web_routers._common import (
     _profile_cli_args, _profile_scope, _spawn_hermes_action, config_write_scope, http_failure,
@@ -109,11 +109,10 @@ async def list_mcp_servers(profile: Optional[str] = None):
 
 @router.post("/api/mcp/servers")
 async def add_mcp_server(body: MCPServerCreate, profile: Optional[str] = None):
-    from hermes_cli.mcp_catalog import record_mcp_install
     from hermes_cli.mcp_config import _get_mcp_servers, _save_bearer_auth_token, _save_mcp_server
 
     try:
-        name, server_config, bearer_token = normalize_mcp_server_create(body)
+        name, server_config, bearer_token = _normalize_mcp_server_create(body)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -138,10 +137,6 @@ async def add_mcp_server(body: MCPServerCreate, profile: Optional[str] = None):
 
     def _run():
         saved = _save()
-        # Outside the config mutation lock: a cold first metric call costs imports + catalog loads.
-        with _profile_scope(body.profile or profile):
-            record_mcp_install("url" if server_config.get("url") else "local", None,
-                               "success" if saved else "failed", failure_class=None if saved else "config_rejected")
         if not saved:
             raise HTTPException(
                 status_code=400, detail=f"Server '{name}' rejected: suspicious command/args configuration",

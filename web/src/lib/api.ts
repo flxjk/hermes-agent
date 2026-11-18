@@ -621,14 +621,6 @@ export const api = {
         body: JSON.stringify(body),
       },
     ),
-  getSharedMetricsConsent: (profile = getManagementProfile()) =>
-    fetchJSON<SharedMetricsConsent>(appendProfileParam("/api/shared-metrics/consent", profile)),
-  saveSharedMetricsConsent: (answer: { enabled: boolean; send: boolean }, profile = getManagementProfile()) =>
-    fetchJSON<SharedMetricsConsent>(appendProfileParam("/api/shared-metrics/consent", profile), {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(answer),
-    }),
   saveConfig: (config: Record<string, unknown>, profile = getManagementProfile()) =>
     fetchJSON<{ ok: boolean }>(appendProfileParam("/api/config", profile), {
       method: "PUT",
@@ -1946,15 +1938,6 @@ export interface PlatformStatus {
   error_message?: string;
   state: string;
   updated_at: string;
-}
-
-/** One profile's shared-metrics answer; `reask` = a pre-fix "off" asked once more. */
-export interface SharedMetricsConsent {
-  enabled: boolean;
-  send: boolean;
-  decided: boolean;
-  managed: boolean;
-  reask?: boolean;
 }
 
 export interface StatusResponse {

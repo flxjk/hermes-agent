@@ -227,11 +227,8 @@ def _protected_instruction_reason(filepath: str, task_id: str = "default",
         return None
 
     normalized = os.path.normpath(_expand_tilde(filepath))
-    from tools.environments.sandbox_scope import sandbox_lexical_path
     try:
-        anchored = str(_resolve_path_for_task(filepath, task_id))
-        lexical = sandbox_lexical_path(anchored)  # a hosted agent's sandbox path: never resolved here
-        resolved = lexical if lexical is not None else os.path.realpath(anchored)
+        resolved = os.path.realpath(str(_resolve_path_for_task(filepath, task_id)))
     except (OSError, ValueError, RuntimeError):
         resolved = os.path.realpath(normalized)
 
@@ -580,10 +577,7 @@ def _stale_overwrite_blocker(filepath: str, resolved: str | None, task_id: str) 
         return (
             f"{filepath} was modified since you last read it (external edit or "
             "concurrent agent). Re-read the file before writing.")
-    from tools.environments.sandbox_scope import hosted_scope
-    if not resolved or hosted_scope() is not None or _has_full_write_baseline(resolved, task_id):
-        # A hosted agent's path names its sandbox, where no host baseline can exist (as for any
-        # remote backend, whose files the host-side existence check below never finds).
+    if not resolved or _has_full_write_baseline(resolved, task_id):
         return None
     try:
         exists = Path(resolved).exists()

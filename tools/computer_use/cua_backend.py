@@ -30,9 +30,10 @@ from tools.computer_use.cua_backend_parse import _action_result_from
 from tools.computer_use.cua_backend_session import _AsyncBridge, _CuaDriverSession
 
 logger = logging.getLogger(__name__)
-# cua-driver's anonymous PostHog telemetry gate ("0" disables; absent => ON upstream).
-_CUA_TELEMETRY_ENV_VAR = "CUA_DRIVER_RS_TELEMETRY_ENABLED"
 _CUA_NATIVE_WAYLAND_ENV_VAR = "CUA_DRIVER_RS_ENABLE_WAYLAND"
+# cua-driver is a third-party binary whose anonymous PostHog telemetry defaults ON upstream. Hermes
+# turns it off in every child env and offers no setting that turns it back on.
+_CUA_TELEMETRY_ENV_VAR = "CUA_DRIVER_RS_TELEMETRY_ENABLED"
 
 
 def _computer_use_cfg() -> dict[str, Any]:
@@ -64,10 +65,6 @@ def _cua_no_overlay() -> bool:
         # owns the overlay surface lifecycle there.
         os.environ.get("XDG_SESSION_TYPE") != "wayland" and not os.environ.get("WAYLAND_DISPLAY"))
 
-
-def _cua_telemetry_disabled() -> bool:
-    """True unless ``computer_use.cua_telemetry`` opts in (unreadable config fails SAFE toward disabling)."""
-    return not bool(_computer_use_cfg().get("cua_telemetry", False))
 
 def _cua_configured_permission_mode() -> str:
     """``computer_use.permission_mode``: ``standard`` (default) or ``bounded``; unknown values fall closed to
@@ -135,19 +132,18 @@ def backend_display_stale(recorded: str, current: str) -> bool:
 
 
 def cua_driver_child_env(base_env: Optional[dict[str, str]] = None) -> dict[str, str]:
-    """Env for spawning cua-driver: ``base_env`` (default ``os.environ``) plus ``CUA_DRIVER_RS_TELEMETRY_ENABLED=0``
-    unless the user opted in, plus the native-Wayland bridge (``computer_use.native_wayland`` config opt-in, only when
-    the child has a Wayland display). Used by every spawn site (MCP, status, doctor, install) so CLI and gateway
-    runtimes share one policy."""
+    """Env for spawning cua-driver: ``base_env`` (default ``os.environ``), the driver's own upstream
+    telemetry forced off, plus the native-Wayland bridge (``computer_use.native_wayland`` config
+    opt-in, only when the child has a Wayland display). Used by every spawn site (MCP, status,
+    doctor, install) so CLI and gateway runtimes share one policy."""
     env = dict(os.environ if base_env is None else base_env)
     # A running Bot Desktop for this profile owns the agent's screen: DISPLAY/XAUTHORITY/DBUS point there so
     # cua-driver never acts on a seat the human is sitting at (#90374 class) and headless hosts get a display.
     from tools.bot_desktop.runtime import desktop_env as _bot_desktop_env
     env = _bot_desktop_env(env)
-    if _cua_telemetry_disabled():
-        env[_CUA_TELEMETRY_ENV_VAR] = "0"
     if sys.platform == "linux" and env.get("WAYLAND_DISPLAY") and bool(_computer_use_cfg().get("native_wayland", False)):
         env[_CUA_NATIVE_WAYLAND_ENV_VAR] = "1"
+    env[_CUA_TELEMETRY_ENV_VAR] = "0"
     return env
 
 def sandbox_mcp_invocation() -> Optional[tuple[tuple[str, list[str]], dict[str, str]]]:
@@ -166,15 +162,14 @@ def sandbox_mcp_invocation() -> Optional[tuple[tuple[str, list[str]], dict[str, 
     env = _bd_runtime._sandbox_env(create=True)
     if env is None:
         raise RuntimeError("the terminal backend's sandbox is not running, so there is nowhere to run cua-driver")
-    command, args = sandbox_host.cua_mcp_invocation(env, _bd_runtime._profile_name(),
-                                                    {**published, _CUA_TELEMETRY_ENV_VAR: "0"})
+    command, args = sandbox_host.cua_mcp_invocation(env, _bd_runtime._profile_name(), dict(published))
     _bd_runtime.touch_activity()
     return (command, args), {"PATH": os.environ.get("PATH", "")}
 
 
 def sanitized_cua_driver_env() -> dict[str, str]:
     """``cua_driver_child_env()`` with Hermes provider secrets stripped — cua-driver is a third-party binary and must
-    never inherit API keys. Falls back to the unsanitized telemetry env if the sanitizer can't import."""
+    never inherit API keys. Falls back to the unsanitized env if the sanitizer can't import."""
     env = cua_driver_child_env()
     with contextlib.suppress(Exception):
         # cua-driver is a third-party binary — never hand it provider API keys via inherited env (same

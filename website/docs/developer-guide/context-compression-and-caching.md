@@ -278,12 +278,9 @@ text, the focus topic or error messages.
   for like. `tool_results_pruned` and `reasoning_items_pruned` count the
   deterministic passes that ran before and after the summary.
 
-The opt-in `hermes.compression.count` shared metric keeps coarse triggers
-(`auto`, `manual`, `overflow`) and counts only attempts the local compressor
-ran; blocked and Codex-routed attempts appear in the log line only. When the
-NeMo Relay runtime is live, the same record, plus micro-compaction passes and
-committed proactive prunes, is also emitted as a `hermes.compaction` mark (see
-[NeMo Relay Shared Metrics](./relay-shared-metrics.md#compaction-marks)).
+The attempt log line keeps coarse triggers (`auto`, `manual`, `overflow`) and
+covers only attempts the local compressor ran; blocked and Codex-routed
+attempts appear in the log line with their own failure class.
 
 
 ## Configuration
@@ -727,9 +724,7 @@ cannot publish, and its summary stream is closed rather than billed to completio
 eviction or process restart simply means the next compaction runs inline; releasing the agent (cache
 eviction, a rewind, `close()`) also cancels a running pass. A held summary therefore helps only an
 agent that lives across turns (interactive CLI, TUI/Desktop and messaging sessions); a `-q --resume`
-chain builds a new agent per run and gets no head start. Pass log lines carry `session=<id>`, and
-opt-in shared metrics count adoption and every pass and splice outcome
-(`hermes.prepared_compaction.count`, see the shared-metrics guide). Plugin context engines,
+chain builds a new agent per run and gets no head start. Pass log lines carry `session=<id>`. Plugin context engines,
 Codex app-server sessions, native Responses compaction and micro-compaction are not prepared.
 
 

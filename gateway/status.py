@@ -1095,7 +1095,7 @@ def _prepare_runtime_status_update(
     ingress_url: Any = _UNSET, listener_base: Any = _UNSET, clear_profile_platforms: bool = False,
     drop_profile_platforms: Optional[str] = None, keep_platforms: Iterable[str] = (),
     load_existing: bool = True, reload_existing: bool = False,
-) -> tuple[Path, dict[str, Any], dict[str, Any]]:
+) -> tuple[Path, dict[str, Any]]:
     """Merge one update into the process-wide canonical status snapshot."""
     global _runtime_status_state_path, _runtime_status_state
     path = _get_runtime_status_path()
@@ -1104,8 +1104,8 @@ def _prepare_runtime_status_update(
             _runtime_status_state_path = path
             _runtime_status_state = (
                 (_read_json_file(path) if load_existing else None) or _build_runtime_status_record())
-        # The module snapshot is only ever reassigned (never mutated in place) and
-        # submit() copies again, so the previous snapshot can be handed out as-is.
+        # The module snapshot is only ever reassigned (never mutated in place), so it is a
+        # safe base for this update's copy.
         previous_payload = _runtime_status_state
         payload = copy.deepcopy(previous_payload)
         current_record = _build_pid_record()
@@ -1154,15 +1154,8 @@ def _prepare_runtime_status_update(
                 writer_start_time=current_record["start_time"])
             payload["platforms"][platform] = platform_payload
         _runtime_status_state = payload
-        return path, payload, previous_payload
+        return path, payload
 
-
-def _emit_runtime_status_transition(
-    previous_payload: dict[str, Any], payload: dict[str, Any]
-) -> None:
-    with contextlib.suppress(Exception):
-        from agent.monitoring.gateway_health import emit_runtime_status_transition
-        emit_runtime_status_transition(previous_payload, payload)
 
 def write_runtime_status(
     *, reload_existing: bool = False, wait_timeout: Optional[float] = None, **fields: Any,
@@ -1174,13 +1167,10 @@ def write_runtime_status(
     Keyword ``fields`` are those of ``_prepare_runtime_status_update``.
     """
     with _runtime_status_state_lock:
-        path, payload, previous_payload = _prepare_runtime_status_update(
+        path, payload = _prepare_runtime_status_update(
             reload_existing=reload_existing, **fields)
         writer = _get_runtime_status_writer()
         generation = writer.submit(path, payload)
-    # Report the transition once it is queued (matching ``publish_runtime_status``): a
-    # timed-out update is still written by the background writer, so its transition happened.
-    _emit_runtime_status_transition(previous_payload, payload)
     return writer.wait(generation, timeout=wait_timeout)
 
 
@@ -1190,10 +1180,9 @@ def publish_runtime_status(**fields: Any) -> int:
     Keyword ``fields`` are those of ``_prepare_runtime_status_update``.
     """
     with _runtime_status_state_lock:
-        path, payload, previous_payload = _prepare_runtime_status_update(
+        path, payload = _prepare_runtime_status_update(
             load_existing=False, **fields)
         generation = _get_runtime_status_writer().submit(path, payload)
-    _emit_runtime_status_transition(previous_payload, payload)
     return generation
 
 

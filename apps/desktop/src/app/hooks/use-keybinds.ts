@@ -32,7 +32,6 @@ import { registerBuiltinActionRunner } from '@/lib/keybinds/plugin-actions'
 import { stepReasoningEffort, writeSessionReasoningEffort } from '@/lib/reasoning-step'
 import { openWorktreeDialog } from '@/store/coding-status'
 import { $commandPaletteOpen, openCommandPalettePage, toggleCommandPalette } from '@/store/command-palette'
-import { recordAction, recordDislike } from '@/store/desktop-metrics'
 import {
   $findInPage,
   findNext as findNextMatch,
@@ -514,7 +513,6 @@ export function useKeybinds(deps: KeybindRuntimeDeps): void {
         if (step.type === 'set') {
           setBinding(capturing, step.combos)
         } else {
-          recordDislike('cancelled', 'keybind_capture')
         }
 
         endCapture()
@@ -621,7 +619,6 @@ export function useKeybinds(deps: KeybindRuntimeDeps): void {
         }
 
         markKeybindHandled(event)
-        recordAction(actionId, 'shortcut')
 
         return
       }

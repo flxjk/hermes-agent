@@ -445,7 +445,7 @@ class ConnectorClient:
             raise GatewayAuthError(
                 "no portal access token available", code="NO_TOKEN", status=401
             )
-        headers.update(connector_headers(self._call))
+        headers.update(connector_headers())
         headers["Content-Type"] = "application/json"
         if idempotency_key:
             headers["x-idempotency-key"] = idempotency_key

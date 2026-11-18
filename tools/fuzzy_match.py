@@ -405,7 +405,6 @@ def fuzzy_find_and_replace(content: str, old_string: str, new_string: str,
     elif result is None:
         result = _run_strategy_chain(content, old_string, new_string, replace_all, _SIMILARITY_TIER)
     if result is None:
-        _note_edit_match(None, "no_match")
         return content, 0, None, "Could not find a match for old_string in the file" + (
             GUTTER_MISS_SUFFIX if stripped is not None else "")
     if result[3] is None and correction_note and correction_notes is not None:
@@ -422,14 +421,12 @@ def _run_strategy_chain(content: str, old_string: str, new_string: str, replace_
             continue
 
         if len(matches) > 1 and not replace_all:
-            _note_edit_match(None, "ambiguous")
             locations = _format_match_locations(content, matches)
             return content, 0, None, (
                 f"Found {len(matches)} matches for old_string. "
                 f"Provide more context to make it unique, or use replace_all=True. "
                 f"Matches:\n{locations}")
         if replace_all and len(matches) > 1 and strategy_name in SIMILARITY_STRATEGIES:
-            _note_edit_match(None, "ambiguous")
             return content, 0, None, (
                 f"Found {len(matches)} approximate matches via the "
                 f"'{strategy_name}' strategy; replace_all only applies to exact "
@@ -449,7 +446,6 @@ def _run_strategy_chain(content: str, old_string: str, new_string: str, replace_
             old_string=old_string if strategy_name != "exact" else None,
             unicode_plan=(_unicode_edit_plan(old_string, effective_new)
                           if strategy_name == "unicode_normalized" else None))
-        _note_edit_match(strategy_name)
         return new_content, len(matches), strategy_name, None
     return None
 
@@ -523,7 +519,6 @@ def _gutter_recovery(content: str, stripped_old: str, strategies: list, new_stri
     stripped_new = _strip_line_number_gutter(new_string, min_numbered=1)
     if stripped_new is None:
         if _GUTTER_LINE.search(new_string):
-            _note_edit_match(None, "no_match")
             return content, 0, None, GUTTER_NEW_STRING_ERROR
         stripped_new = new_string
     if stripped_old == stripped_new:
@@ -532,16 +527,6 @@ def _gutter_recovery(content: str, stripped_old: str, strategies: list, new_stri
     if result and result[3] is None and correction_notes is not None:
         correction_notes.append(GUTTER_STRIPPED_NOTE)
     return result
-
-
-def _note_edit_match(strategy: Optional[str], miss: Optional[str] = None) -> None:
-    """Report to shared metrics which strategy landed (or why none did); a no-op unless a
-    metered patch tool call is in progress."""
-    try:
-        from hermes_cli.observability.shared_metrics_harness import note_edit_match
-    except Exception:
-        return
-    note_edit_match(strategy, miss)
 
 
 # ── Escape-drift guards ──────────────────────────────────────────────────

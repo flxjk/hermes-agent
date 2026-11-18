@@ -2109,9 +2109,9 @@ class GatewayShutdownMixin(GatewaySessionEndMixin):
     async def _stop_persist_exit_state(self, ctx: GatewayShutdownMixin._StopContext) -> None:
         """Clean-shutdown marker, restart markers, terminal runtime status; process bootstrap
         releases PID/lock ownership after the writer drain."""
-        from gateway.run import _hermes_home, _shutdown_gateway_health_export
+        from gateway.run import _hermes_home
         if getattr(self, "_startup_cleanup_only", False):  # start never ran: keep startup_failed + crash markers
-            return _shutdown_gateway_health_export(self)
+            return
         # Clean-shutdown marker skips crash-turn recovery next boot; a timed-out drain left
         # half-finished sessions, so no marker — the next startup recovers their turn markers.
         if not ctx.timed_out:
@@ -2161,7 +2161,6 @@ class GatewayShutdownMixin(GatewaySessionEndMixin):
                 logger.warning("Timed out flushing terminal gateway runtime status")
         except Exception:
             logger.debug("Failed to flush terminal gateway runtime status", exc_info=True)
-        _shutdown_gateway_health_export(self)
         logger.info("Gateway stopped (total teardown %.2fs)", ctx.elapsed())
 
     def _shutdown_watchdog_snapshot(self, ctx: GatewayShutdownMixin._StopContext) -> dict:

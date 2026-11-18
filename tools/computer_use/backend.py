@@ -73,7 +73,7 @@ class ActionResult:
     action: str
     message: str = ""                # human-readable summary
     capture: Optional[CaptureResult] = None  # trailing screenshot, when requested / always-on
-    meta: dict[str, Any] = field(default_factory=dict)  # debugging / telemetry extras
+    meta: dict[str, Any] = field(default_factory=dict)  # debugging extras
     verified: Optional[bool] = None  # AX read-back: True confirmed, False unconfirmed, None n/a
     effect: Optional[str] = None     # "confirmed" | "unverifiable" | "suspected_noop"
     # {"recommended": "px"|"foreground"|"page", "reason": str} — only when driver recommends climbing

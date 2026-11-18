@@ -57,9 +57,9 @@ def _restore_agent_model_runtime(agent, snapshot: dict | None) -> None:
             agent.reasoning_config = snapshot["reasoning_config"]
 
 
-def _profile_runtime_scope_tokens(profile_home, *, hydrate_secrets: bool = True):
-    """Bind HERMES_HOME + secret + terminal scope for ``profile_home`` (None = launch profile) as one
-    change and return its token (``hermes_scope.StateToken``). The launch profile's SECRET scope is always bound — its ``.env`` over
+def _profile_runtime_scope_tokens(profile_home, *, hydrate_secrets: bool = True) -> _TurnScopes:
+    """Bind HERMES_HOME + secret + terminal scope for ``profile_home`` (None = launch profile) and
+    return the reset tokens. The launch profile's SECRET scope is always bound — its ``.env`` over
     the launch env (live while single-profile, frozen at activation afterwards; never live
     ``os.environ`` once a secondary context may have written to it, #107422) — so the credential
     source is fixed at entry and an in-flight launch body survives a concurrent first-secondary
@@ -72,36 +72,68 @@ def _profile_runtime_scope_tokens(profile_home, *, hydrate_secrets: bool = True)
     from any body that persists state rather than calls a provider: the exit-flush worker has a 5s
     TOTAL budget, and one slow source there costs the transcript the flush exists to save.
     """
-    from agent.runtime_scope import bind_state, scope_for_profile
     from agent.secret_scope import is_multiplex_active
-    if profile_home:
-        # External sources first (unless skipped): the profile may never have been served here.
-        # The same terminal policy the gateway binds per turn: a docker-configured profile must
-        # never resolve the launch process's pinned env. Failure -> refusal scope.
-        bound = bind_state(scope_for_profile(profile_home), hydrate_secrets=hydrate_secrets)
-    else:
-        # The launch home IS get_hermes_home() (``_profile_home`` answers None for "already the
-        # launch profile"); single-profile, only its secrets need binding. Once multiplexing is
-        # active the override and terminal policy are bound too: an unset override is the
-        # "unbound context" signal plugin runtime bindings and per-home slots fail closed on
-        # (#118538). Resolved at call time like the launch state.db handle: a harness that
-        # re-homes the process after import must not read the old home's .env. Secrets are
-        # unstamped: this IS the process's own profile, and the stamp marks a FOREIGN home.
-        from tui_gateway.launch_profile_policy import launch_secret_scope, launch_terminal_env
-        home = _launch_home()
-        multiplex = is_multiplex_active()
-        bound = bind_state(scope_for_profile(home), secrets=launch_secret_scope(home), stamp_home=False,
-                           env_overlay=launch_terminal_env() if multiplex else None,
-                           home_override=multiplex, terminal=multiplex)
-    # bind_state computes every piece before installing any, so a raise here leaves nothing bound.
-    return bound
+    scopes = _TurnScopes()
+    try:
+        if profile_home:
+            home = Path(profile_home)
+            # External sources first: the requested profile may never have been served in this process.
+            if hydrate_secrets:
+                from hermes_cli.env_loader import hydrate_profile_secret_sources
+                hydrate_profile_secret_sources(home)
+            secrets = build_profile_secret_scope(home)
+            overlay = None
+            scopes.home = set_hermes_home_override(str(home))
+        else:
+            # The launch home IS get_hermes_home() (``_profile_home`` answers None for "already the
+            # launch profile"); single-profile, only its secrets need binding. Once multiplexing is
+            # active the override is bound too: an unset override is the "unbound context" signal
+            # plugin runtime bindings and per-home slots fail closed on (#118538).
+            # Resolve at call time like the launch state.db handle: a harness that
+            # re-homes the process after import must not read the old home's .env.
+            from tui_gateway.launch_profile_policy import launch_secret_scope, launch_terminal_env
+            home = _launch_home()
+            secrets = launch_secret_scope(home)
+            # No home stamp: this IS the process's own profile, and the stamp exists only to
+            # mark a FOREIGN home for serves_routed_profile().
+            scopes.secret = set_secret_scope(secrets)
+            if not is_multiplex_active():
+                return scopes
+            scopes.home = set_hermes_home_override(str(home))
+            overlay = launch_terminal_env()
+        if scopes.secret is None:
+            scopes.secret = set_secret_scope(secrets, profile_home=str(home) if profile_home else None)
+        # Same terminal policy the gateway binds per turn: a docker-configured profile
+        # must never resolve the launch process's pinned env. Failure → refusal scope.
+        from tools.terminal_scope import install_profile_terminal_scope
+        scopes.terminal = install_profile_terminal_scope(home, env_overlay=overlay)
+        return scopes
+    except Exception:
+        # A raise mid-bind leaves no return value for the caller to release —
+        # undo whatever was bound before propagating.
+        _release_profile_runtime_scope_tokens(scopes)
+        raise
 
 
-def _release_profile_runtime_scope_tokens(token) -> None:
-    """Undo ``_profile_runtime_scope_tokens``: home, secrets, terminal policy and runtime scope go
-    back together (one change), so no piece of the previous profile outlives the others."""
-    if token is not None:
-        token.reset()
+def _release_profile_runtime_scope_tokens(scopes: _TurnScopes | None) -> None:
+    """Release terminal → secret → home. Each reset is independent: a failing terminal reset must
+    not leave the previous profile's secrets / HERMES_HOME installed for the next body in this
+    context (a fail-open scope leak on the teardown path). The first failure is re-raised after
+    every scope has been released."""
+    if scopes is None:
+        return
+    from tools.terminal_scope import reset_terminal_scope
+    first_error: BaseException | None = None
+    for token, reset in ((scopes.terminal, reset_terminal_scope), (scopes.secret, reset_secret_scope),
+                         (scopes.home, reset_hermes_home_override)):
+        if token is None:
+            continue
+        try:
+            reset(token)
+        except Exception as exc:
+            first_error = first_error or exc
+    if first_error is not None:
+        raise first_error
 
 
 @contextlib.contextmanager
@@ -203,20 +235,6 @@ def _current_model_runtime(agent, explicit_provider: str) -> tuple:
     return provider, current_model, str(runtime.get("base_url", "") or ""), key
 
 
-def _switch_away_provider(agent, explicit_provider: str, current_provider: str) -> str | None:
-    """The provider of the model the user leaves. Agent-less with ``--provider``, ``current_provider``
-    is the TARGET (what switch_model wants), so the launch route names it instead; None when only a
-    credential resolve could tell, which the metric reads as ``unknown`` and so reports the model as
-    ``custom``."""
-    if agent or not explicit_provider:
-        return current_provider
-    if env_provider := os.environ.get("HERMES_TUI_PROVIDER", "").strip():
-        return env_provider
-    if _env_model_seed():
-        return None
-    return _config_model_target()[1] or None
-
-
 def _merge_preflight_warning(result, agent, session: dict, cfg, custom_provs) -> None:
     """Fold the context-compression preflight warning into ``result`` (best-effort)."""
     try:
@@ -285,9 +303,7 @@ LARGE_MODEL_NOTICE_KEY = "model.large_notice"
 def _apply_model_switch(
     sid: str, session: dict, raw_input: str, *, confirm_expensive_model: bool = False,
     pin_session_override: bool = True, parsed_flags: Any | None = None,
-    persist_override: bool | None = None, count_switch: bool = True) -> dict:
-    """``count_switch=False``: an internal swap (config adoption, MoA one-shot and its restore), not a
-    user's /model pick, so it stays out of the shared-metrics switch count."""
+    persist_override: bool | None = None) -> dict:
     from hermes_cli.model_switch import parse_model_switch_args, switch_model
     if parsed_flags is None:
         parsed_flags = parse_model_switch_args(raw_input)
@@ -358,13 +374,6 @@ def _apply_model_switch(
         persist_model_selection(result)
     if reasoning_effort:
         _apply_switch_reasoning(sid, session, agent, reasoning_effort, persist_global=persist_global, one_turn=one_turn)
-    if count_switch:
-        from hermes_cli.observability.shared_metrics_events import record_model_switch
-
-        record_model_switch(
-            from_provider=_switch_away_provider(agent, explicit_provider, current_provider),
-            to_provider=result.target_provider, surface=_session_source(session), from_model=current_model,
-            session_id=getattr(agent, "session_id", None))
     if (notice := getattr(result, "usage_notice", "")) and sid:
         # Window plans, Large model: a warning, never a confirm. The existing notice event, so desktop
         # (toast) and TUI (status line) show it for every switch path, live or applied at turn start.
@@ -395,8 +404,7 @@ def _reset_session_model_override(sid: str, session: dict) -> dict:
             model != getattr(agent, "model", "") or (provider and provider != getattr(agent, "provider", ""))):
         _apply_model_switch(
             sid, session, f"{model} --provider {provider}" if provider else model,
-            confirm_expensive_model=True, pin_session_override=False, persist_override=False,
-            count_switch=False)
+            confirm_expensive_model=True, pin_session_override=False, persist_override=False)
     _persist_live_session_runtime(session)
     _emit_session_info(sid, session)
     shown = model or getattr(agent, "model", "") or t("gateway.shared.unknown_value")
@@ -506,7 +514,7 @@ def _sync_agent_model_with_config(sid: str, session: dict) -> None:
         # how `hermes --tui -m` once leaked into config.yaml).
         _apply_model_switch(
             sid, session, raw, confirm_expensive_model=True, pin_session_override=False,
-            persist_override=False, count_switch=False)
+            persist_override=False)
     except Exception as e:
         logger.warning("Configured model %s could not be adopted for session %s: %s", model, sid, e)
         from gateway.warning_notifications import render_notification

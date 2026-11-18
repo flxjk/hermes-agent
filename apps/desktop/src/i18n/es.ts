@@ -23,7 +23,6 @@ import { esPluginUpdate } from './es_plugin_update'
 import { esPluginUpdateAll } from './es_plugin_update_all'
 import { esPreviewWeb } from './es_preview_web'
 import { esProjects } from './es_projects'
-import { esSharedMetrics } from './es_shared_metrics'
 import { esThemePicker } from './es_theme_picker'
 import { esUpdateChannel } from './es_update_channel'
 import { introEs } from './intro-es'
@@ -34,7 +33,6 @@ export const esOverrides = {
     lookupFailed: "No se pudo encontrar este grupo en la pasarela. Inténtalo de nuevo.",
     missing: "Este chat de grupo ya no existe."
   },
-  sharedMetrics: esSharedMetrics,
   firstRun: esFirstRun,
   intro: introEs,
   connectors: esConnectorCard,

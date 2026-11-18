@@ -361,7 +361,6 @@ def install_pack_plugins(
     )
     from hermes_cli.plugins_admission import AdmissionRefused
     from hermes_cli.plugins_cmd_catalog import raise_if_removed
-    from hermes_cli.plugins_cmd_install import recorded_install
     results: list[PackInstallResult] = []
 
     def _fail(display: str, error: str) -> None:
@@ -378,9 +377,8 @@ def install_pack_plugins(
             if not rp.entry.repo:  # a name-only recall names the catalog entry; the core sees only its repo
                 raise_if_removed(rp.entry.name or "")
             # A bare pack name resolved through the plugin catalog; repo entries are custom sources.
-            _target, manifest, installed_name = recorded_install(
-                lambda: _install_plugin_core(rp.identifier, force=force, ref=rp.entry.ref),
-                catalog_name=None if rp.entry.repo else rp.entry.name, identifier=rp.identifier)
+            _target, manifest, installed_name = _install_plugin_core(
+                rp.identifier, force=force, ref=rp.entry.ref)
         except PluginOperationError as exc:
             _fail(display, str(exc))
             continue

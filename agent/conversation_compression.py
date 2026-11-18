@@ -1247,7 +1247,7 @@ def run_compress_context_with_progress_timeout(
             "slot when they return; if this persists, check the summary provider health.",
             _COMPRESS_EXECUTOR_MAX_WORKERS,
         )
-        # Saturation refusals must hit the same telemetry stream as other failures, or
+        # Saturation refusals must hit the same attempt log as other failures, or
         # a wedged pool looks like compression simply stopped being attempted.
         if telemetry_agent is not None:
             _emit_compression_attempt_telemetry(
@@ -1608,7 +1608,6 @@ def _adopt_live_compression_child(
         return None
     agent.session_id = child_session_id
     _rebind_session_context(child_session_id)
-    _hand_off_metrics_segment(parent_session_id, child_session_id)
     agent._session_db_created = True
     # The turn skips restore/rebuild while this slot is set, so it may hold only the child's own
     # prompt, and only when that prompt matches the current runtime (otherwise None -> rebuild).
@@ -2435,13 +2434,6 @@ def _stamp_scoped_twins(targets: list, source: dict, *, exact_counts_stamped: bo
 _PENDING_CONTEXT_ENGINE_NOTIFICATION = "_pending_context_engine_compression_notification"
 
 
-def _hand_off_metrics_segment(old_session_id: str, new_session_id: str) -> None:
-    """Shared metrics count one conversation across the rotation (a no-op when collection is off)."""
-    with _swallow('shared-metrics segment hand-off failed', exc_info=True):
-        from hermes_cli.observability.relay_shared_metrics import rotate_segment
-        rotate_segment(old_session_id, new_session_id)
-
-
 def _notify_context_engine_compression_complete(agent: Any, *, new_session_id: str, old_session_id: str) -> bool:
     """Notify the active context engine after a durable compression commit."""
     # Opt-in relay session-span segmentation. Observer semantics — failure must
@@ -2451,7 +2443,6 @@ def _notify_context_engine_compression_complete(agent: Any, *, new_session_id: s
         relay_runtime.SESSION_COORDINATOR.notify_session_compacted(
             profile_key=relay_runtime.current_profile_key(), session_id=new_session_id, old_session_id=old_session_id
         )
-    _hand_off_metrics_segment(old_session_id, new_session_id)
     callback = getattr(agent.context_compressor, "on_session_start", None)
     if not callable(callback):
         return False
@@ -3865,7 +3856,7 @@ class _Attempt:
 
 def _begin_compression_attempt(
     agent: Any, *, force: bool, defer_notification: bool, trigger: Optional[str] = None,
-    approx_tokens: Optional[int] = None, overflow_reason: Optional[str] = None,
+    overflow_reason: Optional[str] = None,
 ) -> _Attempt:
     """Snapshot + claim the compressor, reset per-attempt agent signals, build this attempt's telemetry seed
     (written to the compressor only at dispatch, in ``_run_summary_phase``).
@@ -3896,11 +3887,7 @@ def _begin_compression_attempt(
         "attempt_id": attempt_id, "session_id": getattr(agent, "session_id", None) or "", "trigger_source": trigger,
         "overflow_reason": overflow_reason,
     }
-    with contextlib.suppress(Exception):
-        agent._compression_attempt_id = attempt_id
-        from hermes_cli.observability.shared_metrics_events import begin_compression_attempt
-
-        begin_compression_attempt(trigger, approx_tokens or getattr(agent.context_compressor, "last_prompt_tokens", None))
+    agent._compression_attempt_id = attempt_id
     return _Attempt(snapshot, generation, started_at, seed)
 
 
@@ -3985,15 +3972,16 @@ def compress_context(
     session state after its caller has moved on. verbatim_tail: The exchanges ``/compress here N`` keeps
     after ``messages``; an in-place commit stores them after the compacted head and returns head + tail.
     trigger: Why this attempt runs (``"overflow"``, ``"pre_api"``, ``"post_tool"``, ``"idle"``, ...); defaults
-    to manual/auto from ``force``. Feeds attempt telemetry only; shared metrics bucket it coarsely.
+    to manual/auto from ``force``. Feeds attempt telemetry only.
     snapshot_is_current: Optional host snapshot validation after durable lease admission. This protects
     edits completed before admission; it is not a substitute for the host's final publication fence.
     overflow_reason: The error classifier's reason for the provider rejection an ``"overflow"`` attempt
-    recovers from (``"context_overflow"``, ``"payload_too_large"``, ``"long_context_tier"``). Telemetry only.
+    recovers from (``"context_overflow"``, ``"payload_too_large"``, ``"long_context_tier"``). Feeds the
+    attempt record only.
     """
     attempt = _begin_compression_attempt(
         agent, force=force, defer_notification=defer_context_engine_notification, trigger=trigger,
-        approx_tokens=approx_tokens, overflow_reason=overflow_reason,
+        overflow_reason=overflow_reason,
     )
 
     # Codex owns the real thread; route compaction to its own compact (config

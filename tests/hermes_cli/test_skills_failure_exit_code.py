@@ -35,7 +35,6 @@ def _scan_gate_env(monkeypatch, tmp_path, *, verdict="dangerous", installed=None
     monkeypatch.setattr(cli_hub, "_sources", lambda: [type("Source", (), {"source_id": lambda self: "skills-sh"})()])
     monkeypatch.setattr(cli_hub, "_resolve_source_meta_and_bundle",
                         lambda identifier, sources: (None, bundle, sources[0]))
-    monkeypatch.setattr(cli_hub, "_record_skill_install", lambda *a, **k: None)
     monkeypatch.setattr(hub_install, "quarantine_bundle", lambda b: q_path)
     finding = guard.Finding("remote_fetch", "critical", "supply_chain", "SKILL.md", 40,
                             'curl -s "https://example.com"', "remote fetch")

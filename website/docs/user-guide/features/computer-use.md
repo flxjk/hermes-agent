@@ -541,21 +541,10 @@ active provider (`cua`, the default, or an installed provider plugin; see
 ### Telemetry
 
 cua-driver ships with anonymous usage telemetry (PostHog) enabled by default
-upstream. **Hermes disables it for you** — on every cua-driver invocation
+upstream. **Hermes disables it unconditionally** — on every cua-driver invocation
 (the MCP backend, `status`, `doctor`, and install) Hermes sets
-`CUA_DRIVER_RS_TELEMETRY_ENABLED=0` in the driver's environment.
-
-To opt back in (let cua-driver use its own default and send telemetry), set
-this in `config.yaml`:
-
-```yaml
-computer_use:
-  cua_telemetry: true   # default: false (telemetry off)
-```
-
-When it's on, `hermes computer-use doctor` reports `telemetry: enabled`;
-when off (the default), it reports `telemetry: disabled via
-CUA_DRIVER_RS_TELEMETRY_ENABLED`.
+`CUA_DRIVER_RS_TELEMETRY_ENABLED=0` in the driver's environment, overriding whatever
+the parent process carried. No Hermes setting turns it back on.
 
 ## Testing against a local cua-driver build
 

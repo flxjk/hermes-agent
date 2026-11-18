@@ -1669,22 +1669,6 @@ def _locked_then_unlocked_tui_setters(plane, server, session):
     assert all("unset" not in p["body"] for p in plane.patches())
 
 
-def test_tui_shared_metrics_set_refuses_a_locked_consent(plane, monkeypatch):
-    """Round 4 #6 (same class): the consent setter is explicit too; a locked answer is refused,
-    not saved-minus-the-lock while the consent bookkeeping records it."""
-    plane.upper = {"telemetry": {"shared_metrics": {"enabled": False, "send": False}}}
-    plane.upper_locks = [{"path": "telemetry.shared_metrics", "level": "tenant"}]
-    server = _tui_server(monkeypatch, plane.home)
-    recorded = []
-    from hermes_cli import setup as setup_mod
-    monkeypatch.setattr(setup_mod, "_record_send_consent_change", lambda **kw: recorded.append(kw))
-
-    answer = server._methods["shared_metrics.set"](1, {"enabled": True, "send": True})
-
-    assert answer["error"]["code"] == 4002 and "locked" in answer["error"]["message"]
-    assert plane.patches() == [] and recorded == []
-
-
 def test_poll_between_read_and_save_sends_only_the_callers_edit(plane, monkeypatch):
     """A poll landing after ``set_config_value`` read the doc and before it saved must not turn
     the keys that poll changed into edits of ours (sent with the current expectedVersion, so no
@@ -1858,7 +1842,6 @@ def test_custom_endpoint_make_default_refuses_when_its_provider_entry_is_locked(
     lock = [{"path": "providers", "level": "tenant"}]
     if schedule == "locked":
         plane.upper_locks = lock
-    monkeypatch.setattr(config_env, "_record_custom_endpoint_setup", lambda home: None)
     monkeypatch.setattr(config_env, "_validated_main_model_selection", lambda cfg, provider, model, base_url: ModelSwitchResult(
         success=True, new_model=model, target_provider=provider, provider_changed=True, base_url=base_url,
         api_mode="chat_completions", is_global=True))

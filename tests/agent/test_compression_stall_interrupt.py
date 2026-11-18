@@ -13,6 +13,8 @@ not Chat Completions vs Responses frame shapes.
 from __future__ import annotations
 
 import copy
+import json
+import logging
 import os
 import time
 from pathlib import Path
@@ -59,6 +61,15 @@ def _messages():
 
 def _age_fence(fence: CompressionCommitFence, idle_seconds: float) -> None:
     fence._last_progress = time.monotonic() - float(idle_seconds)
+
+
+def _attempt_failure_classes(caplog) -> list[str]:
+    prefix = "context compression attempt telemetry: "
+    return [
+        json.loads(record.getMessage().split(prefix, 1)[1])["failure_class"]
+        for record in caplog.records
+        if prefix in record.getMessage()
+    ]
 
 
 class TestStallClassificationIsFenceIdle:
@@ -108,16 +119,14 @@ class TestStallClassificationIsFenceIdle:
 
 
 class TestEarlyStopStaysNeutral:
-    @pytest.mark.parametrize(("user_stop", "outcome"), [(True, "skipped"), (False, "failed")])
+    @pytest.mark.parametrize(
+        ("user_stop", "failure_class"), [(True, "explicit_interrupt"), (False, "commit_fence_cancelled")]
+    )
     def test_explicit_interrupt_before_stall_does_not_arm_cooldown(
-        self, tmp_path: Path, monkeypatch, user_stop, outcome
+        self, tmp_path: Path, caplog, user_stop, failure_class
     ):
-        """Only the user's stop counts ``skipped``; a host timeout that cancels the fence (gateway hygiene
-        budget, total ceiling) without the stop event is a real failure even before the stall window."""
-        from hermes_cli.observability import shared_metrics_events
-
-        recorded = []
-        monkeypatch.setattr(shared_metrics_events, "record_compression", lambda **kw: recorded.append(kw["outcome"]))
+        """Only the user's stop is ``explicit_interrupt``; a host timeout that cancels the fence (gateway
+        hygiene budget, total ceiling) without the stop event is a real failure even before the stall window."""
         db, agent = _build_agent(tmp_path, "EARLY_STOP_96775")
         original = _messages()
         live = copy.deepcopy(original)
@@ -132,20 +141,21 @@ class TestEarlyStopStaysNeutral:
 
         agent.context_compressor.compress = _early_stop
 
-        compressed, _prompt = compress_context(
-            agent,
-            live,
-            "sys",
-            approx_tokens=50_000,
-            commit_fence=fence,
-        )
+        with caplog.at_level(logging.INFO, logger="agent.conversation_compression"):
+            compressed, _prompt = compress_context(
+                agent,
+                live,
+                "sys",
+                approx_tokens=50_000,
+                commit_fence=fence,
+            )
 
         assert compressed == original
         assert live == original
         assert db.get_compression_lock_holder("EARLY_STOP_96775") is None
         assert db.get_compression_failure_cooldown("EARLY_STOP_96775") is None
         assert agent.context_compressor.should_compress(50_000) is True
-        assert recorded == [outcome]
+        assert _attempt_failure_classes(caplog) == [failure_class]
         db.append_message("EARLY_STOP_96775", "assistant", "still writable")
 
 

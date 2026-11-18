@@ -52,7 +52,6 @@ def save_completed_result(session) -> None:
 
     with session._lock:
         record = {key: getattr(session, key) for key in _RESULT_FIELDS}
-        record["sandbox_key"] = session.sandbox_key
         record["output"] = session.output_buffer[-MAX_OUTPUT_CHARS:]
     # Live-output opt-out must not persist raw credentials in durable receipts.
     record["output"] = redact_terminal_output(record["output"], record["command"], force=True)
@@ -111,8 +110,7 @@ def load_completed_results(prefix: str = "") -> dict:
                 continue
             session = ProcessSession(
                 **{key: record[key] for key in _RESULT_FIELDS},
-                # Receipts written before processes carried a sandbox are a local activity's.
-                sandbox_key=record.get("sandbox_key", ""), exited=True, output_buffer=record["output"],
+                exited=True, output_buffer=record["output"],
             )
             session._completion_event.set()
             results[session.id] = session

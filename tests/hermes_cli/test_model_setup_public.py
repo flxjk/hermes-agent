@@ -20,13 +20,12 @@ def test_persist_model_selection_writes_the_model_section(tmp_path, monkeypatch)
     assert "api_key" not in model  # endpoint credentials of the previous route never carry over
 
 
-def test_note_setup_failure_reaches_the_setup_metric(monkeypatch):
-    seen = []
-    monkeypatch.setattr("hermes_cli.observability.shared_metrics_setup.note_provider_setup_failure", seen.append)
+def test_note_setup_failure_is_an_inert_compatibility_stub():
+    """The published provider-plugin helper stays callable and records nothing: the opt-in
+    provider-setup metric it fed is gone, the name is not."""
     from hermes_cli.model_setup import note_setup_failure
 
-    note_setup_failure("auth")
-    assert seen == ["auth"]
+    assert note_setup_failure("auth") is None
 
 
 def test_secret_source_label_names_an_external_source(monkeypatch):

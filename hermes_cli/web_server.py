@@ -39,6 +39,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from hermes_constants import WEBAPP_ATTACHMENT_MAX_BYTES
 from hermes_cli.config import load_config
+from hermes_cli.web_server_profiles import _CONFIG_MUTATION_LOCK
 from hermes_cli.version_info import get_version_info
 
 try:
@@ -484,11 +485,8 @@ async def _token_auth_seam(request: Request, call_next):
 
     A registered token route is owned here — authenticate, attach the principal
     + ``token_authenticated`` so downstream gates skip enforcement. Non-token
-    routes pass through untouched. ``/api/peer/`` is owned by the peer-pass check instead.
+    routes pass through untouched.
     """
-    from hermes_cli.dashboard_auth.peer_pass import is_peer_path, peer_pass_middleware
-    if is_peer_path(request.url.path):  # only a peer pass opens it; nothing else is tried
-        return await peer_pass_middleware(request, call_next)
     from hermes_cli.dashboard_auth.native_http import authenticate_native_http, native_profile_scope
     from hermes_cli.dashboard_auth.token_auth import token_auth_middleware
     rejection = await authenticate_native_http(request)
@@ -559,10 +557,7 @@ async def _dashboard_health_middleware(request: Request, call_next):
     except Exception as exc:
         DASHBOARD_HEALTH.record_error(type(exc).__name__, request.url.path)
         raise
-    # /api/peer answers carry the gateway api_server's status (asleep, restarting, its own errors),
-    # which the gateway component reports; they say nothing about this process.
-    from hermes_cli.dashboard_auth.peer_pass import is_peer_path
-    if response.status_code >= 500 and not is_peer_path(request.url.path):
+    if response.status_code >= 500:
         DASHBOARD_HEALTH.record_error(f"http_{response.status_code}", request.url.path)
     return response
 
@@ -805,14 +800,12 @@ from hermes_cli.web_routers import (
     chat_workspaces as _chat_workspaces_routes,
     dashboard_ui as _dashboard_ui_routes,
     webapp as _webapp_routes,
-    shared_metrics as _shared_metrics_routes,
     delegation as _delegation_routes,
     webapp_access as _webapp_access_routes,
     ui_preferences as _ui_preferences_routes,
     gateway_connections as _gateway_connections_routes,
     gateway_connections_reach as _gateway_connections_reach_routes,
     webapp_relay_proxy as _webapp_relay_proxy_routes,
-    peer as _peer_routes,
 )
 
 import hermes_cli.web_routers.desktop_plugins as _desktop_plugin_routes
@@ -857,8 +850,6 @@ app.include_router(_dashboard_ui_routes.router)
 app.include_router(_webapp_routes.router)
 # The saved-connections proxy checks its surface per request (WebSocket routes take no Request).
 app.include_router(_webapp_relay_proxy_routes.router)
-app.include_router(_peer_routes.router)
-app.include_router(_shared_metrics_routes.router)
 app.include_router(_delegation_routes.router)
 app.include_router(_webapp_access_routes.router, dependencies=[_Depends(_route_on("web_access"))])
 app.include_router(_ui_preferences_routes.router, dependencies=[_Depends(_route_on("ui_preferences"))])
@@ -1535,9 +1526,6 @@ def _start_server_runtime(
                 start_mcp_discovery_after_bind=start_mcp_discovery_after_bind,
                 ssh_lock_path=ssh_lock_path,
             )
-            if headless:
-                from hermes_cli.observability.shared_metrics_startup import record_process_ready
-                record_process_ready("serve_boot", background=True)
 
             await server.main_loop()
             if server.started:

@@ -268,7 +268,7 @@ def is_local_backend() -> bool:
 
 
 def browser_backend_name(local_engine: Optional[str] = None) -> str:
-    """Shared-metrics label for the active profile's backend in session-creation precedence
+    """The active profile's backend in session-creation precedence
     (CDP override > cloud provider > local engine). ``local_engine``: the call ran on a LOCAL browser (the
     hybrid ``::local`` sidecar, a cloud failure's local fallback, the real profile) of that engine (``local``
     or ``lightpanda``, as its session was created), so neither a configured provider nor ``browser.engine``
