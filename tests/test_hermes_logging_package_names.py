@@ -34,3 +34,16 @@ def test_component_routing_matches_top_level_and_package_logger_names(component,
     other = next(c for c in sorted(COMPONENT_PREFIXES) if not SAMPLES[c][0].startswith(prefixes))
     record = logging.LogRecord(f"{package}{SAMPLES[other][0]}", logging.WARNING, __file__, 1, "msg", (), None)
     assert not _ComponentFilter(prefixes).filter(record)
+
+
+@pytest.mark.parametrize("package", ["", "hermes_agent."])
+def test_formatted_lines_print_the_canonical_logger_name(package):
+    from agent.redact import RedactingFormatter
+    from hermes_logging import _LOG_FORMAT, DisplayNameFormatter
+
+    record = logging.makeLogRecord({"name": f"{package}gateway.run", "levelname": "INFO", "msg": "started"})
+    assert RedactingFormatter(_LOG_FORMAT).format(record).endswith(" INFO gateway.run: started")
+    assert DisplayNameFormatter("%(name)s: %(message)s").format(record) == "gateway.run: started"
+    assert record.name == f"{package}gateway.run"
+    root = logging.makeLogRecord({"name": "hermes_agent", "msg": "x"})
+    assert DisplayNameFormatter("%(name)s").format(root) == "hermes_agent"

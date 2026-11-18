@@ -11,6 +11,7 @@ import { useI18n } from '@/i18n'
 import { triggerHaptic } from '@/lib/haptics'
 import { AlertCircle, AlertTriangle, CheckCircle2, type IconComponent, Info } from '@/lib/icons'
 import { cn } from '@/lib/utils'
+import { noticeIdForToast, recordFriction } from '@/store/desktop-metrics'
 import {
   $notifications,
   type AppNotification,
@@ -21,7 +22,14 @@ import {
 
 type ToneVariant = 'default' | 'destructive' | 'warning' | 'success'
 
+/** A user dismissal (✕, swipe, clear all) is friction, counted by the toast's code-defined id only.
+ *  Timers, action buttons and programmatic clears are not dismissals and go straight to the store. */
+function noteUserDismissed(id: string) {
+  recordFriction('notice_dismissed', noticeIdForToast(id))
+}
+
 function userDismiss(id: string) {
+  noteUserDismissed(id)
   dismissNotification(id)
 }
 
@@ -136,7 +144,11 @@ function TopCenterStack({
           <Button
             className="-mr-2"
             onClick={() => {
+              notifications.forEach(notification => noteUserDismissed(notification.id))
+              // Clears every transient toast, as before; persistent cards in
+              // this stack go too, since Clear all is the explicit dismissal.
               clearNotifications()
+              notifications.filter(notification => notification.persistent).forEach(notification => dismissNotification(notification.id))
             }}
             size="xs"
             type="button"

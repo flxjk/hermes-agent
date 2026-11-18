@@ -16,9 +16,9 @@ import stat
 import threading
 import time
 from contextlib import ExitStack
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
-from agent.file_safety import get_nt_namespace_error, get_read_block_error
+from agent.file_safety import get_nt_namespace_error, get_read_block_error, is_blocked_device_path
 from agent.tool_result_classification import GUARDRAIL_REFUSAL_KEY
 from tools.binary_extensions import has_binary_extension
 from tools.skill_provenance import is_background_review
@@ -29,7 +29,7 @@ from tools import file_state
 from hermes_platform.host import facts
 from agent.redact import _is_secret_file_arg, redact_sensitive_text
 from tools.file_tools_paths import (
-    _expand_tilde, _path_resolution_warning, _resolve_base_dir, _resolve_entry_for_task,
+    _expand_tilde, _hosted_tilde, _path_resolution_warning, _resolve_base_dir, _resolve_entry_for_task,
     _resolve_path_for_task)
 from tools.file_tools_write_guards import (
     _READ_DEDUP_STATUS_MESSAGE, _check_approval_required_write, _check_binary_document_write,
@@ -118,21 +118,6 @@ def _apply_char_budget(result_dict: dict, content: str, offset: int, total_lines
 # Above this size, a wide read (limit > 200) gets a hint toward targeted reads.
 _LARGE_FILE_HINT_BYTES = 512_000
 
-# Device/fd paths whose reads hang the process. Checked by path only — no I/O.
-_BLOCKED_DEVICE_PATHS = frozenset({
-    "/dev/zero", "/dev/random", "/dev/urandom", "/dev/full",     # never reach EOF
-    "/dev/stdin", "/dev/tty", "/dev/console",                    # block on input
-    "/dev/stdout", "/dev/stderr",                                # nonsensical to read
-    "/dev/fd/0", "/dev/fd/1", "/dev/fd/2",                       # fd aliases
-})
-# /proc/<pid>/... (and /proc/<pid>/task/<tid>/...) files that leak secrets,
-# argv, memory layout (ASLR oracle: maps family, auxv, pagemap) or raw memory.
-_BLOCKED_PROC_SUFFIXES = (
-    "/fd/0", "/fd/1", "/fd/2",  # stdio aliases
-    "/environ", "/cmdline", "/maps", "/smaps", "/smaps_rollup", "/numa_maps",
-    "/mem", "/auxv", "/pagemap")
-
-
 def _file_ops_uses_host_paths(file_ops) -> bool:
     """True when *file_ops* targets the host filesystem (only then may we stat paths
     or rewrite V4A headers to host-absolute paths; sandboxes have their own namespace)."""
@@ -152,33 +137,37 @@ _V4A_MOVE_HEADER_RE = re.compile(r'^(\*\*\*\s*Move\s+File:\s*)(.+?)\s*->\s*(.+)$
 
 
 def _rewrite_v4a_patch_paths_for_host(patch: str, path_to_resolved: dict, path_to_entry: dict,
-                                      file_ops) -> str:
+                                      file_ops, task_id: str = "default") -> str:
     """Rewrite V4A file headers to the resolved host paths (host backends only).
 
     The shell layer must patch the SAME files ``patch_tool`` resolved for
     locking/staleness, not re-resolve a relative header against its own cwd
     (which can differ — the git-worktree cwd bug). Delete and Move headers take
     ``path_to_entry``: they act on a symlink itself, never on its target.
+
+    In a hosted scope only a ``~`` header changes, to the sandbox's home; every other header is the
+    sandbox's to anchor and is sent as written.
     """
-    if not _file_ops_uses_host_paths(file_ops):
+    from tools.environments.sandbox_scope import hosted_scope
+    hosted = hosted_scope() is not None
+    if not _file_ops_uses_host_paths(file_ops) and not hosted:
         return patch
 
     def _res(raw: str, entry: bool = False) -> str:
         raw = raw.strip()
+        if hosted:
+            return _hosted_tilde(raw, task_id) if raw.startswith("~") else raw
         return (path_to_entry if entry else path_to_resolved).get(raw) or raw
 
+    def _as_written(m: re.Match) -> bool:
+        return hosted and not any(g.strip().startswith("~") for g in m.groups()[1:])
+
     patch = _V4A_SINGLE_HEADER_RE.sub(
-        lambda m: f"{m.group(1)}{_res(m.group(3), entry=m.group(2) == 'Delete')}", patch)
+        lambda m: m.group(0) if _as_written(m) else f"{m.group(1)}{_res(m.group(3), entry=m.group(2) == 'Delete')}",
+        patch)
     return _V4A_MOVE_HEADER_RE.sub(
-        lambda m: f"{m.group(1)}{_res(m.group(2), entry=True)} -> {_res(m.group(3), entry=True)}", patch)
-
-
-def _is_blocked_device_path(path: str) -> bool:
-    """Return True for concrete device/fd/proc paths that can hang reads or leak process state."""
-    normalized = os.path.normpath(_expand_tilde(path))
-    if normalized in _BLOCKED_DEVICE_PATHS:
-        return True
-    return normalized.startswith("/proc/") and normalized.endswith(_BLOCKED_PROC_SUFFIXES)
+        lambda m: m.group(0) if _as_written(m)
+        else f"{m.group(1)}{_res(m.group(2), entry=True)} -> {_res(m.group(3), entry=True)}", patch)
 
 
 def _is_blocked_device(filepath: str, base_dir: str | Path | None = None) -> bool:
@@ -191,7 +180,7 @@ def _is_blocked_device(filepath: str, base_dir: str | Path | None = None) -> boo
     if base_dir is not None and not os.path.isabs(expanded):
         expanded = os.path.join(os.fspath(base_dir), expanded)
     normalized = os.path.normpath(expanded)
-    if _is_blocked_device_path(normalized):
+    if is_blocked_device_path(normalized):
         return True
 
     seen: set[str] = set()
@@ -204,7 +193,7 @@ def _is_blocked_device(filepath: str, base_dir: str | Path | None = None) -> boo
         if not os.path.isabs(target):
             target = os.path.join(os.path.dirname(current), target)
         target = os.path.normpath(target)
-        if _is_blocked_device_path(target):
+        if is_blocked_device_path(target):
             return True
         if target in seen:
             break
@@ -215,7 +204,7 @@ def _is_blocked_device(filepath: str, base_dir: str | Path | None = None) -> boo
         resolved = os.path.normpath(os.path.realpath(normalized))
     except (OSError, ValueError):
         return False
-    return _is_blocked_device_path(resolved)
+    return is_blocked_device_path(resolved)
 
 
 def _resolved_match_path(path: str, task_id: str) -> str:
@@ -602,6 +591,18 @@ def _record_successful_read(task_data: dict, task_id: str, path: str, resolved_s
     return count
 
 
+def _read_device_base(path: str, task_id: str) -> tuple[Path | PurePosixPath | None, bool]:
+    """The base the device check anchors a relative read on, and whether the read is unanchored. In a hosted scope
+    with no known sandbox cwd the relative path is the sandbox's to anchor, sent as written (as search does)."""
+    try:
+        return (None if Path(path).expanduser().is_absolute() else _resolve_base_dir(task_id)), False
+    except ValueError:
+        from tools.environments.sandbox_scope import hosted_scope
+        if hosted_scope() is None:
+            raise
+        return None, True
+
+
 def read_file_tool(path: str, offset: int = 1, limit: int = DEFAULT_READ_LIMIT, task_id: str = "default") -> str:
     """Read a file with pagination and line numbers.
 
@@ -620,14 +621,15 @@ def read_file_tool(path: str, offset: int = 1, limit: int = DEFAULT_READ_LIMIT, 
         nt_err = get_nt_namespace_error(path, verb="Read")
         if nt_err:
             return tool_error(nt_err)
+        path = _hosted_tilde(path, task_id)  # a hosted read sends the path as given: ``~`` is the sandbox's home
 
-        device_base = None if Path(path).expanduser().is_absolute() else _resolve_base_dir(task_id)
+        device_base, unanchored = _read_device_base(path, task_id)
         if _is_blocked_device(path, base_dir=device_base):
             return tool_error(
                 f"Cannot read '{path}': this is a device file that would "
                 "block or produce infinite output.")
 
-        _resolved = _resolve_path_for_task(path, task_id)
+        _resolved = PurePosixPath(path) if unanchored else _resolve_path_for_task(path, task_id)
 
         # A read on a FIFO/socket blocks until the exec timeout: a self-shipped DoS.
         if _file_ops_uses_host_paths(_get_file_ops(task_id)):
@@ -1006,7 +1008,7 @@ def patch_tool(mode: str = "replace", path: str | None = None, old_string: str |
                 if not patch:
                     return tool_error("patch content required")
                 result = file_ops.patch_v4a(
-                    _rewrite_v4a_patch_paths_for_host(patch, _path_to_resolved, _path_to_entry, file_ops))
+                    _rewrite_v4a_patch_paths_for_host(patch, _path_to_resolved, _path_to_entry, file_ops, task_id))
             else:
                 return tool_error(f"Unknown mode: {mode}")
 
@@ -1081,6 +1083,7 @@ def search_tool(pattern: str, target: str = "content", path: str = ".",
         nt_err = get_nt_namespace_error(path, verb="Search")
         if nt_err:
             return tool_error(nt_err)
+        path = _hosted_tilde(path, task_id)
         try:
             resolved_search_path = str(_resolve_path_for_task(path, task_id))
         except (OSError, ValueError, RuntimeError) as exc:

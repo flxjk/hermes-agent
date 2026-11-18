@@ -179,7 +179,7 @@ async def test_turn_error_preserves_failed_outcome_and_wire_suppression(
             assert adapter.wire == []
         else:
             assert len(adapter.wire) == 1
-            assert ("same source failure" in adapter.wire[0][0]) is (setting is not True)
+            assert "same source failure" not in adapter.wire[0][0]
         assert not adapter._active_sessions
     finally:
         await adapter.cancel_background_tasks()
