@@ -48,7 +48,7 @@ class DaytonaEnvironment(BaseEnvironment):
         if not api_key and serves_routed_profile():
             raise ValueError("DAYTONA_API_KEY is not set for this profile: add it to this profile's .env "
                              "(or its secret source). Another profile's Daytona key is never used.")
-        self._daytona = Daytona(DaytonaConfig(api_key=api_key))
+        self._daytona = Daytona(DaytonaConfig(api_key=api_key, otel_enabled=False))
         self._sandbox = None
         self._lock = threading.Lock()
 
