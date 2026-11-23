@@ -58,3 +58,22 @@ def test_legacy_otlp_configuration_cannot_start_exporters(monkeypatch):
     assert not runtime.enabled
     with pytest.raises(OTLPUnavailable, match="disabled"):
         build_exporter(config)
+
+
+@pytest.mark.parametrize("key", ["langfuse", "observability/langfuse"])
+def test_saved_plugin_selection_cannot_enable_langfuse(key, tmp_path):
+    from hermes_cli.plugins_discovery import gate_manifest
+    from hermes_cli.plugins_manifest import PluginManifest
+
+    manifest = PluginManifest(
+        name="langfuse",
+        key=key,
+        version="1",
+        description="External tracing fixture",
+        source="user",
+        path=str(tmp_path / key),
+    )
+    verdict = gate_manifest(manifest, set(), {key})
+    assert verdict.action == "placeholder"
+    assert not verdict.enabled
+    assert verdict.error == "external tracing is disabled in this fork"

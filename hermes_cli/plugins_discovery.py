@@ -280,6 +280,12 @@ def gate_manifest(
     def _placeholder(error: Optional[str], level: int, message: str, *args, enabled: bool = False) -> ManifestGate:
         return ManifestGate("placeholder", enabled=enabled, error=error, log=(level, message, lookup_key, *args))
 
+    if names.intersection({"langfuse", "observability/langfuse"}):
+        return _placeholder(
+            "external tracing is disabled in this fork", logging.INFO,
+            "Skipping external telemetry plugin '%s'",
+        )
+
     # Relay lifecycle is core-owned; an old plugin copy would compete for its registries.
     if names & LEGACY_RELAY_PLUGIN_KEYS:
         error = (
