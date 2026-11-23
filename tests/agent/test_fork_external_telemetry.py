@@ -35,3 +35,26 @@ def test_shared_metrics_sender_is_inert_with_legacy_profile_settings():
     assert not resolve_send_config(config).send
     with pytest.raises(RuntimeError, match="transmission is disabled"):
         _post(endpoint, b"fixture", timeout=1)
+
+
+def test_legacy_otlp_configuration_cannot_start_exporters(monkeypatch):
+    if importlib.util.find_spec("agent.monitoring") is None:
+        return
+
+    from agent.monitoring.gateway_health_export import start_gateway_health_export
+    from agent.monitoring.otlp_exporter import OTLPUnavailable, build_exporter, is_available, start_streaming
+
+    endpoint = "https://collector.example.invalid"
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", endpoint)
+    config = {
+        "monitoring": {
+            "export": {"otlp": {"enabled": True, "endpoint": endpoint}},
+            "gateway_health_export": {"enabled": True, "metrics_enabled": True},
+        },
+    }
+    assert not is_available()
+    assert start_streaming(config) is None
+    runtime = start_gateway_health_export(config)
+    assert not runtime.enabled
+    with pytest.raises(OTLPUnavailable, match="disabled"):
+        build_exporter(config)

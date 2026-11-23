@@ -9,8 +9,6 @@ subscriber runs fail-isolated on the emitter thread; ``event_filter`` keeps othe
 
 from __future__ import annotations
 
-from pm import install_hint
-import importlib
 import logging
 import os
 import re
@@ -24,52 +22,12 @@ logger = logging.getLogger(__name__)
 
 
 class OTLPUnavailable(RuntimeError):
-    """Raised when the optional OpenTelemetry SDK isn't installed."""
+    """Raised when external OpenTelemetry export is unavailable."""
 
 
-# ── SDK loading ──────────────────────────────────────────────────────────────
-_SDK_MODULES: dict[str, tuple[str, ...]] = {
-    "opentelemetry.sdk.trace": ("TracerProvider",),
-    "opentelemetry.sdk.trace.export": ("BatchSpanProcessor",),
-    "opentelemetry.sdk.resources": ("Resource",),
-    "opentelemetry.exporter.otlp.proto.http.trace_exporter": ("OTLPSpanExporter",),
-    "opentelemetry.exporter.otlp.proto.http._log_exporter": ("OTLPLogExporter",),
-    "opentelemetry.exporter.otlp.proto.http.metric_exporter": ("OTLPMetricExporter",),
-    "opentelemetry.trace": ("SpanKind", "INVALID_SPAN_ID", "INVALID_TRACE_ID", "TraceFlags"),
-    "opentelemetry.metrics": ("Observation",),
-    "opentelemetry._logs": ("LogRecord",),
-    "opentelemetry._logs.severity": ("SeverityNumber",),
-    "opentelemetry.sdk._logs": ("LoggerProvider",),
-    "opentelemetry.sdk._logs.export": ("BatchLogRecordProcessor",),
-    "opentelemetry.sdk.metrics": ("MeterProvider",),
-    "opentelemetry.sdk.metrics.export": ("PeriodicExportingMetricReader",),
-}
-_SDK_SYMBOLS: dict[str, str] = {name: module for module, names in _SDK_MODULES.items() for name in names}
-_SPAN_SDK = ("TracerProvider", "BatchSpanProcessor", "Resource", "OTLPSpanExporter", "SpanKind")
-
-
-def _require_sdk(names: Iterable[str] = _SPAN_SDK, *, auto_install: bool = True) -> dict[str, Any]:
-    """Import the named OTel SDK symbols, lazily installing the extra on first use.
-
-    Routes through pm.ensure_import('otlp') so a missing SDK triggers the
-    standard venv install flow — same as every other optional backend — gated by
-    security.allow_lazy_installs.  Any lazy-install failure falls through to the
-    import attempt, which raises OTLPUnavailable with a manual install hint.
-    """
-    if auto_install:
-        try:
-            from pm import ensure_import as _lazy_ensure
-            _lazy_ensure("otlp")
-        except Exception:
-            pass
-    try:
-        return {name: getattr(importlib.import_module(_SDK_SYMBOLS[name]), name) for name in names}
-    except Exception as e:  # ImportError or partial install
-        raise OTLPUnavailable(
-            "OTLP export requires the optional dependency. Install with:\n"
-            f"    {install_hint('otlp')}\n"
-            f"(import error: {e})"
-        )
+def _require_sdk(names: Iterable[str] = (), *, auto_install: bool = True) -> dict[str, Any]:
+    """Keep the optional exporter unavailable regardless of the profile or installed SDK."""
+    raise OTLPUnavailable("External OpenTelemetry export is disabled in this fork")
 
 
 # ── config + connection plumbing ─────────────────────────────────────────────
@@ -255,8 +213,7 @@ def is_available() -> bool:
 
 
 def is_enabled(config: dict[str, Any]) -> bool:
-    otlp = _otlp_config(config)
-    return bool(otlp.get("enabled") and otlp.get("endpoint"))
+    return False
 
 
 def start_streaming(
