@@ -324,19 +324,6 @@ ATOF, ATIF, and OpenTelemetry can include prompts, responses, tool arguments and
 - Configure and test an observability sanitizer when needed. It changes the exported copy, not data sent to models or tools.
 - A normal shutdown lets Relay finish queued work. A crash or forced exit can lose buffered records. Each remote exporter has its own delivery behavior.
 
-### Shared metrics are separate
-
-Hermes's optional [shared metrics](../developer-guide/relay-shared-metrics.md) collect bounded usage counters rather than full conversations. Collection and remote sending have separate settings:
-
-```yaml
-telemetry:
-  shared_metrics:
-    enabled: true
-    send: false
-```
-
-This example enables local collection, not remote sending by the shared-metrics sender. `send: false` does not disable Relay exporters, including automatic export from inherited OTLP settings. Configuring a Relay exporter does not enable shared metrics. When both are enabled, shared-metrics records can also reach Relay's configured subscribers. Dedicated skill lifecycle and load counters belong to this optional mode; normal skill-tool arguments and results remain ordinary tool data.
-
 ## Migrate an older setup
 
 The former Hermes `observability/nemo_relay` plugin and the old `HERMES_NEMO_RELAY_ATOF_*` / `HERMES_NEMO_RELAY_ATIF_*` exporter variables are no longer the configuration path.

@@ -57,7 +57,13 @@ describe('migrateTilesForProfile', () => {
     sessionStore.setRememberedSessionId('s-1', 'webdesign_bhp')
 
     const { migrateTilesForProfile } = await import('@/store/session-states')
-    migrateTilesForProfile('webdesign_bhp', 'hutnik-projectmanager')
+    expect(sessionStore.getRememberedSessionId('webdesign_bhp')).toBe('s-1')
+    expect(sessionStore.getRememberedSessionId('hutnik-projectmanager')).toBeNull()
+    expect(sessionStore.getSessionOwnerHints('s-1')).toEqual([
+      { connectionId: 'local', profile: 'webdesign_bhp', targetProfile: 'webdesign_bhp' }
+    ])
+
+    await migrateTilesForProfile('webdesign_bhp', 'hutnik-projectmanager')
 
     type Tile = { ownerRoute?: { profile: string; targetProfile?: string }; storedSessionId: string }
     const tiles = storage.readJson<Record<string, Tile[]>>('hermes.desktop.sessionTiles.v2')
@@ -92,7 +98,7 @@ describe('migrateTilesForProfile', () => {
 
     const sessionStore = await import('@/store/session')
     const { migrateTilesForProfile } = await import('@/store/session-states')
-    migrateTilesForProfile('webdesign_bhp', 'hutnik-projectmanager')
+    await migrateTilesForProfile('webdesign_bhp', 'hutnik-projectmanager')
 
     expect(sessionStore.getSessionOwnerHints('s-1')).toEqual([
       { connectionId: 'local', profile: 'hutnik-projectmanager', targetProfile: 'hutnik-projectmanager' }
@@ -100,5 +106,22 @@ describe('migrateTilesForProfile', () => {
     // The rename ran on the local backend; the remote profile still has its old name.
     expect(sessionStore.getSessionOwnerHints('s-9')).toEqual([remote])
     expect(storage.readJson<unknown[]>('hermes.desktop.sessionOwnerHints.v1')).toContainEqual(['s-9', remote])
+  })
+
+  it('does not turn a successful profile rename into a failure when local storage is unavailable', async () => {
+    // Keep the actual rename seam, after module loading has initialized its stores.
+    const profiles = await import('@/store/session-states')
+    const descriptor = Object.getOwnPropertyDescriptor(window, 'localStorage')!
+
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      get() { throw new DOMException('storage disabled', 'SecurityError') }
+    })
+
+    try {
+      await expect(profiles.migrateTilesForProfile('alpha', 'renamed')).resolves.toBeUndefined()
+    } finally {
+      Object.defineProperty(window, 'localStorage', descriptor)
+    }
   })
 })

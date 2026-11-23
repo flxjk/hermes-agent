@@ -1563,10 +1563,12 @@ export interface GroupsStateParams {
   room_id: string
   include_disbanded?: boolean | null
 }
+/** ``change_events``: this backend broadcasts ``groups.changed`` when the room moves, so a client's poll is only a backstop (absent on older backends: keep polling at the old rate). */
 export interface GroupsStateResult {
   room: Room
   driver_status?: RoomDriverStatus | null
   context?: RoomContext | null
+  change_events?: boolean | null
 }
 /** ``HostedRoomService.status(room_id)``; ``pending_actions`` rows are the exact attempt (``hosted_room_service.attempt_action``: ``kind`` + ``member_id``/``task_id``/``execution_generation``) or the driver's approval action (``kind: approval`` + run/session/approval context), or a stalled room preparation's Retry (``task_id`` ``prepare:<room_id>``, ``member_id`` the members not woken). ``member_activity`` lists live tasks in admission order (absent from older gateways). ``last_error`` is this room's last preparation failure, null once one succeeds. */
 export interface RoomDriverStatus {
@@ -1879,6 +1881,27 @@ export interface BotRelayReplyParams {
 export interface OkResult {
   ok?: boolean
 }
+/** ``profile`` is the SENDER bot; it routes the call to that profile's connection. */
+export interface BotDeliveryListParams {
+  profile?: string | null
+}
+export interface BotDeliveryListResult {
+  sender: string
+  deliveries: BotDeliveryRow[]
+}
+/** ``tools/bot_delivery_status.py::list_sender_deliveries``. ``since`` is the receipt's last write (epoch seconds); ``waiting_on`` is set for ``waiting_on_you``, ``reason`` (+ ``error``) for ``failed`` — ``unknown_outcome`` means the target may have acted: never resend it. */
+export interface BotDeliveryRow {
+  delivery_id: string
+  target: string
+  target_handle: string
+  state: BotDeliveryState
+  since: number
+  preview: string
+  waiting_on?: string | null
+  reason?: string | null
+  error?: string | null
+}
+export type BotDeliveryState = 'queued' | 'claimed' | 'working' | 'waiting_on_you' | 'failed'
 export interface I18nLanguagesResult {
   languages: LanguageOption[]
 }
@@ -2050,7 +2073,7 @@ export interface ProfileCanonicalSession {
   message_count?: number
   live_message_count?: number | null
 }
-/** ``clone_from`` omitted = fresh profile + bundled skills; ``mirror_credentials`` and ``share_auth`` default on (the bot page's defaults) so a headless bot has a provider. */
+/** ``clone_from`` omitted = fresh profile + bundled skills (with ``clone_all``: a full copy of the active profile, no bundled skills); ``mirror_credentials`` and ``share_auth`` default on (the bot page's defaults) so a headless bot has a provider. */
 export interface ProfilesCreateParams {
   profile?: string | null
   name: string
@@ -3582,6 +3605,9 @@ export interface PromptCacheWindow {
   reason: string
   refreshed_at?: number | null
   coverage?: Record<string, number>
+  warming_off?: boolean
+  tier_pending?: boolean
+  learned?: string | null
 }
 export interface SessionCompressParams {
   session_id: string
@@ -3622,6 +3648,7 @@ export interface SessionInterruptParams {
   session_id: string
   profile?: string | null
   expected_hosted_task_id?: string | null
+  resume?: boolean | null
 }
 export interface SessionInterruptResult {
   status: InterruptStatus
@@ -5875,7 +5902,7 @@ export interface MessageInterimPayload {
   turn_id?: string | null
   segment?: number | null
 }
-/** ``prompt_turn._complete_turn_payload`` / ``session_auto_continue._emit_terminal_turn_error`` / ``agent_callbacks._mirror_subagent_to_child`` (child watch mirror: ``text`` only) / ``compute_host_bridge`` (``text`` + ``status``). */
+/** ``prompt_turn._complete_turn_payload`` / ``session_auto_continue._emit_terminal_turn_error`` / ``agent_callbacks._mirror_subagent_to_child`` (child watch mirror: ``text``, plus ``status`` for a completed child) / ``compute_host_bridge`` (``text`` + ``status``). */
 export interface MessageCompletePayload {
   text?: string | unknown
   usage?: Usage | null
@@ -5893,6 +5920,7 @@ export interface MessageCompletePayload {
   error_surface?: ErrorSurface | null
   partial?: boolean | null
   persisted_turn?: PersistedTurn | null
+  paused?: boolean | null
 }
 /** ``prompt_turn._result_status``. */
 export type TurnStatus = 'complete' | 'error' | 'interrupted'
@@ -6247,6 +6275,12 @@ export interface PetHatchProgressPayload {
 }
 /** ``change_watcher._CHANGE_WATCHES`` payload fn — ``{}`` for every watch except pet.changed. */
 export type ChangeSignalPayload = Record<string, unknown>
+/** ``change_watcher._groups_changed_payload``: the rooms whose log, tasks or live status moved; absent when something process-wide moved (every open room re-reads). ``broadcast_id`` names one broadcast: the same frame reaches a window once per open socket, and a copy needs no second read. */
+export interface GroupsChangedPayload {
+  room_ids?: string[] | null
+  broadcast_id?: string | null
+  [key: string]: unknown
+}
 export type ConnectorErrorReason = 'INVALID_PARAMS' | 'NOT_OWNER' | 'UNSUPPORTED_RUNTIME' | 'CONNECTOR_REQUEST_FAILED' | 'INVALID_CONNECTOR_RESPONSE' | 'UNKNOWN_TARGET' | 'LINK_STILL_VALID' | 'REISSUE_REFUSED' | 'UNKNOWN_OPERATION' | 'INVALID_ANSWER' | 'NEEDS_NOUS_AUTH' | 'CONNECTOR_NOT_FOUND' | 'TOOLS_UNAVAILABLE' | 'CONNECTORS_UNAVAILABLE' | 'CATALOG_UNAVAILABLE' | 'ACCOUNTS_UNAVAILABLE' | 'CONNECTION_NOT_FOUND' | 'POLICY_UNAVAILABLE' | 'POLICY_CONFLICT' | 'FORBIDDEN_SCOPE' | 'ORG_REQUIRED' | 'ORG_ACCESS_DENIED' | 'INVALID_POLICY' | 'ALIAS_TAKEN'
 
 // ── Client→server methods ──
@@ -6271,6 +6305,8 @@ export interface RpcMethods {
   'billing.state': { params: ProfileParams; result: BillingStateResult }
   /** Run the billing:manage device flow; the URL/code arrive via billing.step_up.verification. */
   'billing.step_up': { params: BillingStepUpParams; result: BillingStepUpResult }
+  /** Read-only: this bot's unsettled message_agent deliveries to local teammates, newest first. */
+  'bot_delivery.list': { params: BotDeliveryListParams; result: BotDeliveryListResult }
   /** Deliver a relayed DM into a Bot Chat on this gateway and return the one-turn reply (blocking). */
   'bot_relay.deliver': { params: BotRelayDeliverParams; result: BotRelayDeliverResult }
   /** Atomically claim every pending cross-connection envelope queued on this gateway. */
@@ -6768,6 +6804,7 @@ export const RPC_METHODS = [
   'billing.keep_going_on_credits',
   'billing.state',
   'billing.step_up',
+  'bot_delivery.list',
   'bot_relay.deliver',
   'bot_relay.outbox.drain',
   'bot_relay.reply',
@@ -7262,6 +7299,8 @@ export interface BackendGatewayEventMap {
   'free_tier.challenge': FreeTierChallengePayload
   /** First frame of a connection: the resolved skin, the change-event capability and the replay epoch. */
   'gateway.ready': GatewayReadyPayload
+  /** A Group Chat log, task or live status moved; an open room re-reads its log delta and groups.state. */
+  'groups.changed': GroupsChangedPayload
   /** The turn ended: final text, usage and outcome. */
   'message.complete': MessageCompletePayload
   /** One streamed chunk of the assistant reply (null text: segment boundary). */
@@ -7403,6 +7442,7 @@ export const GATEWAY_EVENT_TYPES = [
   'error',
   'free_tier.challenge',
   'gateway.ready',
+  'groups.changed',
   'message.complete',
   'message.delta',
   'message.interim',
