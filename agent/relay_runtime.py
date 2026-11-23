@@ -7,7 +7,6 @@ import asyncio
 import contextlib
 import contextvars
 import functools
-import importlib
 import inspect
 import logging
 import os
@@ -873,11 +872,7 @@ class RelayHostRegistry:
             host = self._hosts.get(key)
             if host is not None or not create:
                 return host
-            try:
-                host = RelayRuntime(profile_key=key)
-            except Exception as exc:
-                logger.warning("Hermes Relay runtime initialization failed", exc_info=True)
-                host = NoopRelayRuntime(profile_key=key, reason=str(exc))
+            host = NoopRelayRuntime(profile_key=key, reason="External Relay telemetry is disabled")
             self._hosts[key] = host
             return host
 
@@ -1331,8 +1326,7 @@ def current_profile_key() -> str:
 
 
 def _load_nemo_relay() -> Any:
-    """Load the binding only when a producer or consumer needs Relay."""
-    return importlib.import_module("nemo_relay")
+    raise ImportError("External Relay telemetry is disabled in this build")
 
 
 def _configured_plugin_inputs() -> Path | None:
@@ -1384,7 +1378,11 @@ def resolve_plugin_sources(relay: Any = None) -> RelayPluginSources:
     Relay's validator reads the same layers as initialization but does not take the process-wide host.
     Raises when a file cannot be read or parsed.
     """
-    relay = relay or _load_nemo_relay()
+    if relay is None:
+        return RelayPluginSources(
+            config_paths=(), enabled=False, errors=(),
+            warnings=("External Relay exporters are disabled in this build.",),
+        )
     report = relay.plugin.validate({}, additional_plugins_toml=_explicit_plugins_toml())
     diagnostics = [d for d in (report.get("config") or {}).get("diagnostics") or [] if isinstance(d, dict)]
     return RelayPluginSources(
