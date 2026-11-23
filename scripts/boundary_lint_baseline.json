@@ -224,6 +224,7 @@
     "plugins/model-providers/gemini/__init__.py agent.transports.chat_completions._build_gemini_thinking_config": 1,
     "plugins/model-providers/gemini/__init__.py agent.transports.chat_completions._is_gemini_openai_compat_base_url": 1,
     "plugins/model-providers/gemini/__init__.py agent.transports.chat_completions._snake_case_gemini_thinking_config": 1,
+    "plugins/model-providers/gemini/__init__.py hermes_cli.config_providers.get_custom_provider_tls_settings": 1,
     "plugins/model-providers/gemini/client.py agent.bounded_response.read_streaming_error_body": 1,
     "plugins/model-providers/gemini/client.py agent.gemini_long_decode.long_decode_hops": 1,
     "plugins/model-providers/gemini/client.py agent.gemini_native_adapter.GeminiAPIError": 1,
